@@ -1521,16 +1521,23 @@ def _rebuild_download_part_timeline(
         return False
 
 
-def _validate_download_part_rebuild_output(video_path: Path) -> str:
+def _validate_download_part_rebuild_output(
+    video_path: Path,
+    *,
+    include_packet_metrics: bool = True,
+    allow_missing_audio_timing: bool = False,
+    extra_start_tolerance: float = 0.0,
+) -> str:
     if not video_path.exists():
         return "missing_output"
-    metrics = _collect_structural_media_metrics(video_path)
+    metrics = _collect_structural_media_metrics(video_path, include_packet_metrics=include_packet_metrics)
     video_start = float(metrics.get("video_start") or 0.0)
     audio_start = float(metrics.get("audio_start") or 0.0)
     video_end = float(metrics.get("video_end") or 0.0)
     audio_end = float(metrics.get("audio_end") or 0.0)
     max_video_packet = float(metrics.get("max_video_packet") or 0.0)
     max_audio_packet = float(metrics.get("max_audio_packet") or 0.0)
+    start_tolerance = DOWNLOAD_PART_REBUILD_START_GAP_TOLERANCE_SECONDS + max(0.0, float(extra_start_tolerance or 0.0))
     if video_end <= 0.0:
         return "missing_video_timing"
     if audio_end <= 0.0:
@@ -1541,9 +1548,9 @@ def _validate_download_part_rebuild_output(video_path: Path) -> str:
         return "missing_audio_timing"
     start_gap = abs(audio_start - video_start)
     end_gap = abs(audio_end - video_end)
-    if video_start > DOWNLOAD_PART_REBUILD_START_GAP_TOLERANCE_SECONDS or audio_start > DOWNLOAD_PART_REBUILD_START_GAP_TOLERANCE_SECONDS:
+    if video_start > start_tolerance or audio_start > start_tolerance:
         return f"stream_start_not_zero:video_start={video_start:.3f}:audio_start={audio_start:.3f}"
-    if start_gap > DOWNLOAD_PART_REBUILD_START_GAP_TOLERANCE_SECONDS:
+    if start_gap > start_tolerance:
         return f"stream_start_gap_abnormal:gap={start_gap:.3f}:video_start={video_start:.3f}:audio_start={audio_start:.3f}"
     if end_gap > DOWNLOAD_PART_REBUILD_END_GAP_TOLERANCE_SECONDS:
         return f"stream_end_gap_after_rebuild:gap={end_gap:.3f}:video_end={video_end:.3f}:audio_end={audio_end:.3f}"
