@@ -31,6 +31,10 @@ def _parse_dt(value: object) -> datetime | None:
     text = str(value or "").strip()
     if not text:
         return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 
 def _format_size_mb(value: object) -> str:
@@ -39,10 +43,6 @@ def _format_size_mb(value: object) -> str:
     except Exception:
         size_bytes = 0.0
     return f"{size_bytes / (1024 * 1024):.2f}MB"
-    try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except Exception:
-        return None
 
 
 def _now_dt() -> datetime:
@@ -148,6 +148,8 @@ class MobileRecordService:
         self._session_manager = session_manager
         self._lock = asyncio.Lock()
         self._processes: dict[str, subprocess.Popen] = {}
+        self._finalizing_tasks: set[str] = set()
+        self._deleting_tasks: set[str] = set()
         self._scheduler_task: asyncio.Task | None = None
         self._closed = False
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -316,11 +318,11 @@ class MobileRecordService:
 
     def _public_play_url(self, request_base_url: str, task_id: str) -> str:
         base = self._session_manager.build_public_access_base_url(str(request_base_url or "").rstrip("/"))
-        return f"{base}/api/mobile-record/play/{task_id}/index.m3u8"
+        return f"{base}/api/mobile-record/play/{task_id}"
 
     def _lan_play_url(self, request_base_url: str, task_id: str) -> str:
         base = self._session_manager.build_lan_access_base_url(str(request_base_url or "").rstrip("/"))
-        return f"{base}/api/mobile-record/play/{task_id}/index.m3u8"
+        return f"{base}/api/mobile-record/play/{task_id}"
 
     def _event(self, task_id: str, event_type: str, message: str, payload: dict[str, Any] | None = None) -> None:
         try:
@@ -336,23 +338,39 @@ class MobileRecordService:
         return dict(row) if row else None
 
     def _build_callback_payload_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        current = dict(row or {})
+        status = str(current.get("status") or "")
+        if status in ACTIVE_STATUSES or (
+            str(current.get("m3u8_path") or "") and (
+                _as_int(current.get("segment_count")) <= 0
+                or _as_int(current.get("file_size")) <= 0
+                or float(current.get("duration_seconds") or 0.0) <= 0.0
+            )
+        ):
+            info = self._collect_hls_info(current, lightweight=True)
+            if info["ok"]:
+                current["segment_count"] = int(info["segment_count"])
+                current["file_size"] = int(info["file_size"])
+                current["duration_seconds"] = float(info["duration"])
+                if str(info.get("codec") or ""):
+                    current["codec"] = str(info.get("codec") or "")
         return {
-            "taskId": str(row.get("task_id") or ""),
-            "classroomId": str(row.get("classroom_id") or "") or None,
-            "cameraId": str(row.get("nvr_channel_id") or row.get("nvr_channel_num") or "") or None,
-            "status": str(row.get("status") or ""),
-            "stopReason": str(row.get("stop_reason") or "") or None,
-            "playUrl": str(row.get("play_url") or "") or None,
-            "outputDir": str(row.get("output_dir") or "") or None,
-            "m3u8Path": str(row.get("m3u8_path") or "") or None,
-            "segmentCount": int(row.get("segment_count") or 0),
-            "fileSize": int(row.get("file_size") or 0),
-            "duration": float(row.get("duration_seconds") or 0.0),
-            "codec": str(row.get("codec") or "") or None,
+            "taskId": str(current.get("task_id") or ""),
+            "classroomId": str(current.get("classroom_id") or "") or None,
+            "cameraId": str(current.get("nvr_channel_id") or current.get("nvr_channel_num") or "") or None,
+            "status": status,
+            "stopReason": str(current.get("stop_reason") or "") or None,
+            "playUrl": str(current.get("play_url") or "") or None,
+            "outputDir": str(current.get("output_dir") or "") or None,
+            "m3u8Path": str(current.get("m3u8_path") or "") or None,
+            "segmentCount": int(current.get("segment_count") or 0),
+            "fileSize": int(current.get("file_size") or 0),
+            "duration": float(current.get("duration_seconds") or 0.0),
+            "codec": str(current.get("codec") or "") or None,
             "format": "hls",
-            "startTime": _format_callback_time(row.get("start_time")),
-            "finishTime": _format_callback_time(row.get("finish_time")),
-            "errorMessage": str(row.get("error_message") or "") or None,
+            "startTime": _format_callback_time(current.get("start_time")),
+            "finishTime": _format_callback_time(current.get("finish_time")),
+            "errorMessage": str(current.get("error_message") or "") or None,
         }
 
     def _build_callback_payload_for_start_failure(self, req: dict[str, Any], error_message: str) -> dict[str, Any]:
@@ -560,7 +578,11 @@ class MobileRecordService:
                 try:
                     now_dt = _now_dt()
                     elapsed = max(0, int((now_dt - started_at).total_seconds()))
-                    self._log_task_progress(task_id, status="recording", elapsed_seconds=elapsed, estimated_seconds=estimated_seconds)
+                    current_row = self._fetch_task(task_id)
+                    current_estimated = estimated_seconds
+                    if current_row:
+                        current_estimated = _as_int(current_row.get("estimated_duration_seconds")) + _as_int(current_row.get("extend_duration_seconds"))
+                    self._log_task_progress(task_id, status="recording", elapsed_seconds=elapsed, estimated_seconds=current_estimated)
                     now_ts = time.time()
                     if now_ts - last_progress_callback_at >= 180:
                         last_progress_callback_at = now_ts
@@ -730,23 +752,40 @@ INSERT INTO edge_mobile_record_task(
             await self._callback_later(row)
             return True, self._status_payload(row, request_base_url=request_base_url), 200
 
-    def _collect_hls_info(self, row: dict[str, Any]) -> dict[str, Any]:
+    def _read_playlist_duration_seconds(self, m3u8: Path) -> float:
+        if not m3u8.exists():
+            return 0.0
+        total = 0.0
+        try:
+            for line in m3u8.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if not line.startswith("#EXTINF:"):
+                    continue
+                value = line.split(":", 1)[1].rstrip(",").strip()
+                if value:
+                    total += float(value)
+        except Exception:
+            return 0.0
+        return float(total)
+
+    def _collect_hls_info(self, row: dict[str, Any], *, lightweight: bool = False) -> dict[str, Any]:
         out_dir = Path(str(row.get("output_dir") or ""))
         m3u8 = Path(str(row.get("m3u8_path") or out_dir / "index.m3u8"))
         segments = sorted(out_dir.glob("segment_*.ts")) if out_dir.exists() else []
         file_size = sum(int(p.stat().st_size) for p in segments if p.exists())
-        duration = 0.0
-        codec = ""
+        duration = self._read_playlist_duration_seconds(m3u8)
+        codec = str(row.get("codec") or "")
         if m3u8.exists():
-            try:
-                duration = float(probe_duration_seconds(str(m3u8)) or 0.0)
-            except Exception:
-                duration = 0.0
-            try:
-                timings = probe_stream_timings(str(m3u8))
-                codec = str(timings.get("video_codec") or "")
-            except Exception:
-                codec = ""
+            if duration <= 0.0 and not lightweight:
+                try:
+                    duration = float(probe_duration_seconds(str(m3u8)) or 0.0)
+                except Exception:
+                    duration = 0.0
+            if not codec and not lightweight:
+                try:
+                    timings = probe_stream_timings(str(m3u8))
+                    codec = str(timings.get("video_codec") or "")
+                except Exception:
+                    codec = ""
         return {
             "ok": bool(m3u8.exists() and len(segments) > 0),
             "m3u8": str(m3u8),
@@ -782,22 +821,19 @@ INSERT INTO edge_mobile_record_task(
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(subprocess.run, args, capture_output=True, timeout=10)
 
-    async def stop_recording(self, task_id: str, *, action: str = "finish", operator_user_id: str = "", reason: str = "manual", request_base_url: str = "") -> tuple[bool, dict[str, Any], int]:
-        task_id = str(task_id or "").strip()
-        if not task_id:
-            return False, {"code": "BAD_REQUEST", "message": "taskId 不能为空"}, 400
-        async with self._lock:
+    async def _finalize_stop(
+        self,
+        task_id: str,
+        *,
+        action: str,
+        operator_user_id: str,
+        reason: str,
+        request_base_url: str,
+    ) -> None:
+        try:
             row = self._fetch_task(task_id)
             if not row:
-                return False, {"code": "NOT_FOUND", "message": "录制任务不存在"}, 404
-            status = str(row.get("status") or "")
-            if status in FINAL_STATUSES:
-                return True, self._status_payload(row, request_base_url=request_base_url), 200
-            now = bjt_now_iso()
-            self._db.execute(
-                "UPDATE edge_mobile_record_task SET status=?, stop_reason=?, manual_stop_time=?, updated_time=? WHERE task_id=?",
-                ("stopping", str(reason or "manual"), now if reason != "auto_timeout" else None, now, task_id),
-            )
+                return
             await self._terminate_process(task_id, _as_int(row.get("ffmpeg_pid")), graceful=True)
             row = self._fetch_task(task_id) or row
             if str(action or "finish").lower() == "cancel":
@@ -818,9 +854,9 @@ WHERE task_id=?
                 if final_row:
                     self._log_task_stopped(final_row, stop_reason=str(reason or "cancel"))
                 await self._callback_later(final_row)
-                return True, self._status_payload(final_row, request_base_url=request_base_url), 200
+                return
 
-            info = self._collect_hls_info(row)
+            info = self._collect_hls_info(row, lightweight=True)
             if not info["ok"]:
                 self._db.execute(
                     "UPDATE edge_mobile_record_task SET status='failed', finish_time=?, error_message=?, updated_time=? WHERE task_id=?",
@@ -830,7 +866,7 @@ WHERE task_id=?
                 final_row = self._fetch_task(task_id)
                 self._log_task_failed(task_id, status="failed", reason=str(final_row.get("error_message") if final_row else "录制文件无效：未生成有效 HLS 分片"))
                 await self._callback_later(final_row)
-                return False, self._status_payload(final_row, request_base_url=request_base_url), 500
+                return
 
             self._db.execute(
                 """
@@ -857,7 +893,115 @@ WHERE task_id=?
             if final_row:
                 self._log_task_stopped(final_row, stop_reason=str(reason or "manual"))
             await self._callback_later(final_row)
-            return True, self._status_payload(final_row, request_base_url=request_base_url), 200
+        finally:
+            self._finalizing_tasks.discard(task_id)
+
+    async def stop_recording(self, task_id: str, *, action: str = "finish", operator_user_id: str = "", reason: str = "manual", request_base_url: str = "") -> tuple[bool, dict[str, Any], int]:
+        task_id = str(task_id or "").strip()
+        if not task_id:
+            return False, {"code": "BAD_REQUEST", "message": "taskId 不能为空"}, 400
+        async with self._lock:
+            row = self._fetch_task(task_id)
+            if not row:
+                return False, {"code": "NOT_FOUND", "message": "录制任务不存在"}, 404
+            status = str(row.get("status") or "")
+            if status in FINAL_STATUSES:
+                return True, self._status_payload(row, request_base_url=request_base_url), 200
+            if task_id in self._finalizing_tasks or status == "stopping":
+                return True, self._status_payload(self._fetch_task(task_id) or row, request_base_url=request_base_url), 200
+            now = bjt_now_iso()
+            self._db.execute(
+                "UPDATE edge_mobile_record_task SET status=?, stop_reason=?, manual_stop_time=?, updated_time=? WHERE task_id=?",
+                ("stopping", str(reason or "manual"), now if reason != "auto_timeout" else None, now, task_id),
+            )
+            self._finalizing_tasks.add(task_id)
+            asyncio.create_task(
+                self._finalize_stop(
+                    task_id,
+                    action=str(action or "finish").lower(),
+                    operator_user_id=operator_user_id,
+                    reason=reason,
+                    request_base_url=request_base_url,
+                )
+            )
+            return True, self._status_payload(self._fetch_task(task_id) or row, request_base_url=request_base_url), 200
+
+    async def _delete_recording_files_background(self, task_id: str, *, operator_user_id: str, output_dir: str, status: str) -> None:
+        try:
+            out_dir = Path(str(output_dir or ""))
+            if out_dir.exists():
+                await asyncio.to_thread(shutil.rmtree, out_dir, True)
+
+            self._db.execute(
+                """
+UPDATE edge_mobile_record_task
+SET m3u8_path='', play_url='', segment_count=0, file_size=0,
+    duration_seconds=0, codec='', error_message='录制文件已删除', updated_time=?
+WHERE task_id=?
+                """.strip(),
+                (bjt_now_iso(), task_id),
+            )
+            self._event(task_id, "delete_files", "录制文件已删除", {"operatorUserId": operator_user_id})
+            _log.info(
+                "%s 删除录制文件完成 operatorUserId=%s outputDir=%s",
+                self._task_log_prefix(task_id, status),
+                str(operator_user_id or ""),
+                str(out_dir),
+            )
+        except Exception as exc:
+            self._db.execute(
+                "UPDATE edge_mobile_record_task SET error_message=?, updated_time=? WHERE task_id=?",
+                (f"录制文件删除失败：{exc}", bjt_now_iso(), task_id),
+            )
+            self._event(task_id, "delete_files_failed", "录制文件删除失败", {"operatorUserId": operator_user_id, "error": str(exc)})
+            _log.warning(
+                "%s 删除录制文件失败 operatorUserId=%s outputDir=%s error=%s",
+                self._task_log_prefix(task_id, status),
+                str(operator_user_id or ""),
+                str(output_dir or ""),
+                exc,
+            )
+        finally:
+            self._deleting_tasks.discard(task_id)
+
+    async def delete_recording_files(self, task_id: str, *, operator_user_id: str = "") -> tuple[bool, dict[str, Any], int]:
+        task_id = str(task_id or "").strip()
+        if not task_id:
+            return False, {"code": "BAD_REQUEST", "message": "taskId 不能为空"}, 400
+        async with self._lock:
+            row = self._fetch_task(task_id)
+            if not row:
+                return False, {"code": "NOT_FOUND", "message": "录制任务不存在"}, 404
+            status = str(row.get("status") or "")
+            if status in ACTIVE_STATUSES or task_id in self._finalizing_tasks:
+                return False, {"code": "BAD_STATUS", "message": "任务正在录制或停止中，请先结束后再删除"}, 409
+            if task_id in self._deleting_tasks:
+                return True, {"code": "SUCCESS", "message": "删除成功"}, 200
+
+            out_dir = Path(str(row.get("output_dir") or ""))
+            if out_dir.exists():
+                root = self._record_root().resolve()
+                target = out_dir.resolve()
+                try:
+                    target.relative_to(root)
+                except Exception:
+                    return False, {"code": "BAD_PATH", "message": f"录制目录不在允许删除范围内：{target}"}, 400
+            self._deleting_tasks.add(task_id)
+            asyncio.create_task(
+                self._delete_recording_files_background(
+                    task_id,
+                    operator_user_id=operator_user_id,
+                    output_dir=str(out_dir),
+                    status=status,
+                )
+            )
+            _log.info(
+                "%s 删除录制文件请求已受理 operatorUserId=%s outputDir=%s",
+                self._task_log_prefix(task_id, status),
+                str(operator_user_id or ""),
+                str(out_dir),
+            )
+            return True, {"code": "SUCCESS", "message": "删除成功"}, 200
 
     def _write_meta(self, row: dict[str, Any] | None) -> None:
         if not row:
@@ -954,7 +1098,7 @@ WHERE task_id=?
             if pid > 0 and _pid_exists(pid):
                 self._event(task_id, "recover", "服务重启后检测到录制进程仍存在，继续等待后续控制", {"pid": pid})
                 continue
-            info = self._collect_hls_info(row)
+            info = self._collect_hls_info(row, lightweight=True)
             if info["ok"]:
                 self._db.execute(
                     "UPDATE edge_mobile_record_task SET status='finished', finish_time=?, segment_count=?, file_size=?, duration_seconds=?, codec=?, updated_time=? WHERE task_id=?",

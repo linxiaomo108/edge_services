@@ -352,7 +352,7 @@ ON CONFLICT(nvr_device_id, channel_num, provider, ip_address, account, requested
                     ),
                 )
                 conn.commit()
-            _log.info("stream rtsp cache saved: nvr_device_id=%s channel_num=%s provider=%s requested_profile=%s actual_profile=%s rtsp_port=%s", nvr_device_id, channel_num, provider, requested_profile, actual_profile, rtsp_port)
+            _log.debug("stream rtsp cache saved: nvr_device_id=%s channel_num=%s provider=%s requested_profile=%s actual_profile=%s rtsp_port=%s", nvr_device_id, channel_num, provider, requested_profile, actual_profile, rtsp_port)
         except Exception as e:
             _log.warning("stream rtsp cache save failed: nvr_device_id=%s channel_num=%s error=%s", nvr_device_id, channel_num, e)
 
@@ -379,14 +379,14 @@ ON CONFLICT(nvr_device_id, channel_num, provider, ip_address, account, requested
     ) -> int:
         candidate = self._extract_candidate_channel(candidate_channels)
         if candidate > 0:
-            _log.info("stream channel resolve by candidate: nvr_device_id=%s web_channel_num=%s sdk_channel=%s", nvr_device_id, nvr_channel_num, candidate)
+            _log.debug("stream channel resolve by candidate: nvr_device_id=%s web_channel_num=%s sdk_channel=%s", nvr_device_id, nvr_channel_num, candidate)
             return candidate
         if nvr_channel_num > 0:
-            _log.info("stream channel resolve by default web_channel_num: nvr_device_id=%s web_channel_num=%s", nvr_device_id, nvr_channel_num)
+            _log.debug("stream channel resolve by default web_channel_num: nvr_device_id=%s web_channel_num=%s", nvr_device_id, nvr_channel_num)
             return nvr_channel_num
         channel_from_id = self._to_positive_int(nvr_channel_id, 0)
         if channel_from_id > 0:
-            _log.info("stream channel resolve by channel_id: nvr_device_id=%s nvr_channel_id=%s sdk_channel=%s", nvr_device_id, nvr_channel_id, channel_from_id)
+            _log.debug("stream channel resolve by channel_id: nvr_device_id=%s nvr_channel_id=%s sdk_channel=%s", nvr_device_id, nvr_channel_id, channel_from_id)
             return channel_from_id
         raise ValueError("无法解析 NVR 通道，请检查 nvrChannelNum / nvrChannelId / candidateChannels")
 
@@ -460,7 +460,7 @@ ON CONFLICT(nvr_device_id, channel_num, provider, ip_address, account, requested
                     rtsp_port=resolved_rtsp_port,
                     actual_stream_profile=actual_stream_profile,
                 )
-                _log.info("stream rtsp cache hit: nvr_device_id=%s nvr_channel_num=%s resolved_channel=%s rtsp_channel=%s rtsp_port=%s requested_profile=%s actual_profile=%s", nvr_device_id, nvr_channel_num, resolved_channel, rtsp_channel, resolved_rtsp_port, normalized_profile, actual_stream_profile)
+                _log.debug("stream rtsp cache hit: nvr_device_id=%s nvr_channel_num=%s resolved_channel=%s rtsp_channel=%s rtsp_port=%s requested_profile=%s actual_profile=%s", nvr_device_id, nvr_channel_num, resolved_channel, rtsp_channel, resolved_rtsp_port, normalized_profile, actual_stream_profile)
             except Exception as exc:
                 _log.warning("stream rtsp cache verify failed: nvr_device_id=%s nvr_channel_num=%s resolved_channel=%s rtsp_channel=%s requested_profile=%s error=%s", nvr_device_id, nvr_channel_num, resolved_channel, rtsp_channel, normalized_profile, exc)
                 rtsp_url, resolved_rtsp_port, actual_stream_profile = _resolve_playable_rtsp_url(
@@ -491,7 +491,7 @@ ON CONFLICT(nvr_device_id, channel_num, provider, ip_address, account, requested
             rtsp_port=resolved_rtsp_port,
             rtsp_url=rtsp_url,
         )
-        _log.info("stream rtsp url built: provider=%s nvr_channel_num=%s resolved_channel=%s rtsp_channel=%s rtsp_port=%s profile=%s url=%s", normalized_provider, nvr_channel_num, resolved_channel, rtsp_channel, resolved_rtsp_port, actual_stream_profile, rtsp_url)
+        _log.debug("stream rtsp url built: provider=%s nvr_channel_num=%s resolved_channel=%s rtsp_channel=%s rtsp_port=%s profile=%s url=%s", normalized_provider, nvr_channel_num, resolved_channel, rtsp_channel, resolved_rtsp_port, actual_stream_profile, rtsp_url)
         session_key = "|".join(
             [
                 str(campus_code or "").strip(),
@@ -515,7 +515,7 @@ ON CONFLICT(nvr_device_id, channel_num, provider, ip_address, account, requested
                     existing = self._sessions.get(existing_id)
                     if existing is not None:
                         existing.updated_at = now_ts
-                        _log.info("stream session reused: session_id=%s nvr_device_id=%s nvr_channel_num=%s resolved_channel=%s profile=%s protocol=%s", existing.session_id, existing.nvr_device_id, existing.nvr_channel_num, existing.resolved_channel, existing.stream_profile, existing.output_protocol)
+                        _log.debug("stream session reused: session_id=%s nvr_device_id=%s nvr_channel_num=%s resolved_channel=%s profile=%s protocol=%s", existing.session_id, existing.nvr_device_id, existing.nvr_channel_num, existing.resolved_channel, existing.stream_profile, existing.output_protocol)
                         return existing, True
         _log.info("stream rtsp probe ok: nvr_device_id=%s nvr_channel_num=%s rtsp_port=%s rtsp_url=%s", nvr_device_id, nvr_channel_num, resolved_rtsp_port, rtsp_url)
         with self._lock:
@@ -526,7 +526,7 @@ ON CONFLICT(nvr_device_id, channel_num, provider, ip_address, account, requested
                     existing = self._sessions.get(existing_id)
                     if existing is not None:
                         existing.updated_at = time.time()
-                        _log.info("stream session reused after probe: session_id=%s nvr_device_id=%s nvr_channel_num=%s resolved_channel=%s profile=%s protocol=%s", existing.session_id, existing.nvr_device_id, existing.nvr_channel_num, existing.resolved_channel, existing.stream_profile, existing.output_protocol)
+                        _log.debug("stream session reused after probe: session_id=%s nvr_device_id=%s nvr_channel_num=%s resolved_channel=%s profile=%s protocol=%s", existing.session_id, existing.nvr_device_id, existing.nvr_channel_num, existing.resolved_channel, existing.stream_profile, existing.output_protocol)
                         return existing, True
             session_id = uuid.uuid4().hex
             session = StreamSession(
@@ -547,7 +547,7 @@ ON CONFLICT(nvr_device_id, channel_num, provider, ip_address, account, requested
             self._sessions[session_id] = session
             self._session_keys[session_key] = session_id
             self._device_channel_index[(int(nvr_device_id), int(nvr_channel_num))] = session_id
-            _log.info("stream session created: session_id=%s nvr_device_id=%s nvr_channel_num=%s resolved_channel=%s profile=%s protocol=%s", session.session_id, session.nvr_device_id, session.nvr_channel_num, session.resolved_channel, session.stream_profile, session.output_protocol)
+            _log.debug("stream session created: session_id=%s nvr_device_id=%s nvr_channel_num=%s resolved_channel=%s profile=%s protocol=%s", session.session_id, session.nvr_device_id, session.nvr_channel_num, session.resolved_channel, session.stream_profile, session.output_protocol)
             return session, False
 
     def get_session(self, session_id: str) -> StreamSession | None:

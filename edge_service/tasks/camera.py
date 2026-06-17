@@ -106,7 +106,7 @@ CAM_DL_NORM_081 = "CAM-DL-NORM-081"
 CAM_DL_NORM_082 = "CAM-DL-NORM-082"
 # CAM-DL-NORM-083: PCM 音频早到且绝对时间轴异常，优先尝试 copy video + 重建音频时间轴。
 CAM_DL_NORM_083 = "CAM-DL-NORM-083"
-# CAM-DL-NORM-084: 断电/中断类 audio_content_late，按真实视频时长 copy video + 修音频，避免按异常长时间轴重建。
+# CAM-DL-NORM-084: 断电/中断类异常长时间轴，按真实视频时长 copy video + 修音频，避免按异常长时间轴重建。
 CAM_DL_NORM_084 = "CAM-DL-NORM-084"
 
 # CAM-DL-SRC-010: 源视频时间线异常或强制校准，执行源视频时间线重建。
@@ -2055,8 +2055,8 @@ def _copy_video_audio_content_late_repair_part(
     if not ffmpeg_exists():
         return "ffmpeg_missing"
     classification = str(precise_state.get("classification") or "").strip()
-    if classification != "audio_content_late":
-        return f"classification_not_audio_content_late:{classification or 'unknown'}"
+    if classification not in {"audio_content_late", "timestamp_only_audio_late", "duration_delta_audio_late"}:
+        return f"classification_not_abnormal_long_audio_late:{classification or 'unknown'}"
     video_start = float(precise_state.get("video_start") or 0.0)
     audio_start = float(precise_state.get("audio_start") or 0.0)
     if not _has_abnormal_absolute_timeline_start(video_start, audio_start):
@@ -2075,6 +2075,7 @@ def _copy_video_audio_content_late_repair_part(
     raw_audio_duration = float(source_metrics.get("audio_duration") or 0.0)
     raw_format_duration = float(source_metrics.get("format_duration") or 0.0)
     raw_authoritative_duration = float(source_metrics.get("authoritative_duration") or 0.0)
+    trim_sec = float(precise_state.get("audio_late_trim") or 0.0)
     if raw_video_duration <= 0.0 or raw_audio_duration <= 0.0:
         return f"missing_duration:video={raw_video_duration:.3f}:audio={raw_audio_duration:.3f}"
     # 只处理停电/中断类的异常长时间轴：raw 容器声画时长被拉到几十分钟/数小时，
@@ -2158,7 +2159,9 @@ def _copy_video_audio_content_late_repair_part(
     if video_zero_duration >= min(raw_audio_duration, raw_format_duration or raw_audio_duration) - 60.0:
         return f"video_zero_still_abnormal_long:{video_zero_duration:.3f}"
 
+    trim_start = trim_sec if classification in {"timestamp_only_audio_late", "duration_delta_audio_late"} else 0.0
     audio_filter = (
+        f"atrim=start={max(0.0, trim_start):.3f},"
         "asetpts=PTS-STARTPTS,"
         f"atrim=end={video_zero_duration:.3f},"
         f"apad=whole_dur={video_zero_duration:.3f},"
@@ -2203,10 +2206,12 @@ def _copy_video_audio_content_late_repair_part(
     if validation_issue or merge_issue:
         reason = validation_issue or merge_issue
         log.warning(
-            "%s 分段 %s audio_content_late copy-video 快路径验收失败 reason=%s video_zero_elapsed=%.3fs mux_elapsed=%.3fs",
+            "%s 分段 %s 异常长时间轴 copy-video 快路径验收失败 reason=%s classification=%s trim=%.3fs video_zero_elapsed=%.3fs mux_elapsed=%.3fs",
             _branch_code_tag(CAM_DL_NORM_084),
             raw_part.name,
             reason,
+            classification,
+            trim_start,
             video_elapsed,
             mux_elapsed,
         )
@@ -2221,8 +2226,8 @@ def _copy_video_audio_content_late_repair_part(
             tmp_out,
             output_path,
             log=log,
-            action=f"download part audio content late copy-video repair {raw_part.name} -> {output_path.name}",
-            user_message="异常长时间轴音频晚到快路径修复完成，正在等待最终提交",
+            action=f"download part abnormal long timeline copy-video repair {raw_part.name} -> {output_path.name}",
+            user_message="异常长时间轴快路径修复完成，正在等待最终提交",
         )
     except FinalizePendingError:
         raise
@@ -2238,9 +2243,11 @@ def _copy_video_audio_content_late_repair_part(
         except Exception:
             pass
     log.info(
-        "%s 分段 %s audio_content_late copy-video 快路径完成 raw_video=%.3fs raw_audio=%.3fs videozero=%.3fs video_zero_elapsed=%.3fs mux_elapsed=%.3fs audio_filter=%s out=%s",
+        "%s 分段 %s 异常长时间轴 copy-video 快路径完成 classification=%s trim=%.3fs raw_video=%.3fs raw_audio=%.3fs videozero=%.3fs video_zero_elapsed=%.3fs mux_elapsed=%.3fs audio_filter=%s out=%s",
         _branch_code_tag(CAM_DL_NORM_084),
         raw_part.name,
+        classification,
+        trim_start,
         raw_video_duration,
         raw_audio_duration,
         video_zero_duration,
@@ -2480,10 +2487,10 @@ def _normalize_download_part(
     raw_video_metric_duration = float(raw_structural_metrics.get("video_duration") or 0.0)
     raw_audio_metric_duration = float(raw_structural_metrics.get("audio_duration") or 0.0)
     raw_format_metric_duration = float(raw_structural_metrics.get("format_duration") or 0.0)
-    # 只把 7451/7449 这类断电后原始容器时长被拉到异常大值的分段提前送入 084。
-    # 普通 30 分钟左右的 audio_content_late 分段仍交给原 010，避免 part006 这类误试快路径。
-    raw_audio_content_late_abnormal_long = bool(
-        precise_classification == "audio_content_late"
+    # 只把 7449/7451/7457 这类断电后原始容器时长被拉到异常大值的分段提前送入 084。
+    # 普通 30 分钟左右的音频晚到分段仍交给原 010，避免 part006 这类误试快路径。
+    raw_audio_late_abnormal_long = bool(
+        precise_classification in {"audio_content_late", "timestamp_only_audio_late", "duration_delta_audio_late"}
         and absolute_start_abnormal
         and raw_video_metric_duration > 0.0
         and max(raw_video_metric_duration, raw_audio_metric_duration, raw_format_metric_duration) > 3600.0
@@ -2664,18 +2671,19 @@ def _normalize_download_part(
             _format_structural_media_metrics(raw_structural_metrics),
             precise_classification or "unknown",
         )
-    if raw_audio_content_late_abnormal_long:
+    if raw_audio_late_abnormal_long:
         log.info(
-            "%s 分段 %s 命中 audio_content_late 异常长时间轴特征，跳过海康SDK转换，直接按真实视频时长修复 source_metrics=%s",
+            "%s 分段 %s 命中音频晚到异常长时间轴特征，跳过海康SDK转换，直接按真实视频时长修复 classification=%s source_metrics=%s",
             _branch_code_tag(CAM_DL_NORM_084),
             part_path.name,
+            precise_classification or "unknown",
             _format_structural_media_metrics(raw_structural_metrics),
         )
     if (
         (significant_audio_late or absolute_start_abnormal or (timeline_dirty and stream_gap > TIMELINE_GAP_TOLERANCE_SECONDS))
         and not expected_tail_silence_source
         and not source_has_no_audio_stream
-        and not raw_audio_content_late_abnormal_long
+        and not raw_audio_late_abnormal_long
     ):
         # raw 是否存在显著的音视频起始差：以现有检测下限驱动，不再用具体秒数门限。
         # 任一方向（早/晚）的 gap 超过对应检测下限即认为显著，需要在 systrans 准入时校验是否被抹平。
@@ -2825,9 +2833,10 @@ def _normalize_download_part(
         )
         if not content_late_copy_reason:
             log.info(
-                "%s 分段 %s audio_content_late 异常长时间轴 copy-video 快路径验收通过，跳过 010 重建 rebuild_input=%s",
+                "%s 分段 %s 异常长时间轴 copy-video 快路径验收通过，跳过 010 重建 classification=%s rebuild_input=%s",
                 _branch_code_tag(CAM_DL_NORM_084),
                 part_path.name,
+                precise_classification or "unknown",
                 rebuild_input_context,
             )
             return DownloadPartNormalizeResult(
@@ -2835,14 +2844,14 @@ def _normalize_download_part(
                 force_canonical_merge=False,
                 canonicalize_merge_part=False,
                 merge_risk_level=0,
-                normalize_reason="audio_content_late_abnormal_long_copy_video",
+                normalize_reason=f"{precise_classification or 'audio_late'}_abnormal_long_copy_video",
                 merge_part_path=str(normalized_part),
                 classification="aligned",
             )
         if content_late_copy_reason.startswith("cancelled:"):
             raise RuntimeError(content_late_copy_reason)
         log.info(
-            "%s 分段 %s audio_content_late copy-video 快路径未命中或未通过，继续原 010 流程 reason=%s classification=%s",
+            "%s 分段 %s 异常长时间轴 copy-video 快路径未命中或未通过，继续原 010 流程 reason=%s classification=%s",
             _branch_code_tag(CAM_DL_NORM_084),
             part_path.name,
             content_late_copy_reason,

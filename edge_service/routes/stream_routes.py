@@ -330,8 +330,6 @@ def create_stream_router(*, load_monitor_cfg, session_manager) -> APIRouter:
     @router.get("/api/stream/play/{nvr_device_id}/{channel_num}", summary="播放实时流", description="根据NVR设备ID和通道号获取MPEG-TS实时流数据。需要先调用open接口激活通道。返回Content-Type为video/mp2t的流式响应。")
     async def api_stream_play(nvr_device_id: int, channel_num: int, request: Request):
         client_ip = _get_client_ip(request)
-        request_time = time.strftime("%Y-%m-%d %H:%M:%S")
-        _log.info("PLAY client_ip=%s requestTime=%s nvrDeviceId=%s nvrChannelNum=%s", client_ip, request_time, nvr_device_id, channel_num)
         session = session_manager.get_session_by_key(nvr_device_id, channel_num)
         if session is None:
             _log.warning("PLAY rejected=session_not_found client_ip=%s nvrDeviceId=%s nvrChannelNum=%s", client_ip, nvr_device_id, channel_num)
@@ -351,7 +349,7 @@ def create_stream_router(*, load_monitor_cfg, session_manager) -> APIRouter:
         max_recovery_attempts = _env_int("EDGE_STREAM_MAX_RECOVERY_ATTEMPTS", 3)
         activity_touch_interval_sec = _env_int("EDGE_STREAM_ACTIVITY_TOUCH_INTERVAL_SEC", 30)
         _touch_stream_activity(nvr_device_id, channel_num, "play_start")
-        _log.info("PLAY ffmpegBin=%s attempts=%s", _ffmpeg_bin(), len(attempt_plans))
+        _log.debug("PLAY ffmpegBin=%s attempts=%s", _ffmpeg_bin(), len(attempt_plans))
 
         async def _iter_stream():
             recovery_attempt = 0
@@ -363,7 +361,7 @@ def create_stream_router(*, load_monitor_cfg, session_manager) -> APIRouter:
                     first_chunk_at: float | None = None
                     attempt_started_at = time.time()
                     last_touch_at = attempt_started_at
-                    _log.info("PLAY starting client_ip=%s nvrDeviceId=%s nvrChannelNum=%s sessionId=%s recoveryAttempt=%s/%s attempt=%s mode=%s rtspUrl=%s", client_ip, nvr_device_id, channel_num, session.session_id, recovery_attempt, max_recovery_attempts, attempt_index, attempt_name, session.rtsp_url)
+                    _log.info("PLAY request client_ip=%s nvrDeviceId=%s nvrChannelNum=%s sessionId=%s recoveryAttempt=%s/%s attempt=%s mode=%s", client_ip, nvr_device_id, channel_num, session.session_id, recovery_attempt, max_recovery_attempts, attempt_index, attempt_name)
                     proc = await asyncio.create_subprocess_exec(
                         *cmd,
                         stdout=asyncio.subprocess.PIPE,
@@ -371,6 +369,7 @@ def create_stream_router(*, load_monitor_cfg, session_manager) -> APIRouter:
                     )
 
                     async def _read_stderr() -> None:
+                        nonlocal noisy_stderr_count
                         if proc.stderr is None:
                             return
                         try:

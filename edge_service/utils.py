@@ -30,7 +30,7 @@ Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
             _log.info("local ip from ethernet adapter: %s", ip)
             return ip
     except Exception as e:
-        _log.warning("get local ip via powershell failed: %s", e)
+        _log.debug("get local ip via powershell failed: %s", e)
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0.1)

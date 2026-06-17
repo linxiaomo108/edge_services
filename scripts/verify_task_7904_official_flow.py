@@ -143,7 +143,7 @@ def setup_run_logging(log_path: Path) -> None:
 
 def main() -> int:
     total_start = time.perf_counter()
-    parser = argparse.ArgumentParser(description="Run official camera repair + merge flow on task 7904 source parts")
+    parser = argparse.ArgumentParser(description="Run official camera repair + merge flow on local source parts")
     parser.add_argument("--src-dir", type=Path, default=DEFAULT_TASK_DIR)
     parser.add_argument("--work-dir", type=Path, default=None)
     parser.add_argument("--output-name", type=str, default="student_7094.official-flow.mp4")

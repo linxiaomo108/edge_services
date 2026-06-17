@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import PurePosixPath
 from typing import Any, Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 
@@ -24,6 +26,46 @@ def _mask_secret(value: object) -> str:
     if len(text) <= 2:
         return "*" * len(text)
     return f"{text[:1]}***{text[-1:]}(len={len(text)})"
+
+
+def _client_ip(request: Request | None) -> str:
+    try:
+        return str(request.client.host if request and request.client else "")
+    except Exception:
+        return ""
+
+
+def _log_request(event: str, request: Request | None, **fields: object) -> None:
+    parts = [f"{key}={value}" for key, value in fields.items()]
+    suffix = " ".join(parts).strip()
+    if suffix:
+        _log.info("%s client_ip=%s %s", event, _client_ip(request), suffix)
+    else:
+        _log.info("%s client_ip=%s", event, _client_ip(request))
+
+
+def _log_response(event: str, request: Request | None, *, code: str, message: str, status_code: int, **fields: object) -> None:
+    parts = [f"{key}={value}" for key, value in fields.items()]
+    suffix = " ".join(parts).strip()
+    if suffix:
+        _log.info(
+            "%s client_ip=%s code=%s status_code=%s message=%s %s",
+            event,
+            _client_ip(request),
+            str(code or ""),
+            int(status_code or 0),
+            str(message or ""),
+            suffix,
+        )
+    else:
+        _log.info(
+            "%s client_ip=%s code=%s status_code=%s message=%s",
+            event,
+            _client_ip(request),
+            str(code or ""),
+            int(status_code or 0),
+            str(message or ""),
+        )
 
 
 class MobileRecordClassroomItem(BaseModel):
@@ -71,11 +113,11 @@ class MobileRecordStartData(BaseModel):
 
 class MobileRecordStopData(BaseModel):
     taskId: str = Field(default="", description="移动录制任务ID。")
-    status: str = Field(default="", description="停止后的任务状态。固定值：`finished`=正常结束并保留文件；`cancelled`=取消并删除本地文件；`failed`=停止后文件无效或处理失败。")
-    playUrl: str = Field(default="", description="录制完成后的 HLS 播放地址。取消或失败时为空字符串。")
-    segmentCount: int = Field(default=0, description="最终 HLS ts 分片数量。")
-    fileSize: int = Field(default=0, description="HLS 分片文件总大小，单位：字节。")
-    durationSeconds: float = Field(default=0.0, description="最终 HLS 可播放时长，单位：秒。")
+    status: str = Field(default="", description="停止请求后的任务状态。通常会先返回 `stopping`=已受理停止请求，后台正在结束录制；最终会由回调或状态查询进入 `finished`、`cancelled` 或 `failed`。")
+    playUrl: str = Field(default="", description="当前可用的 HLS 播放地址。stop 接口同步返回阶段通常为空；后台收尾完成进入 `finished` 后才会有值。")
+    segmentCount: int = Field(default=0, description="当前已统计到的 HLS ts 分片数量。同步 stop 返回阶段可能还是 0，最终值以后台收尾完成后的回调或状态查询为准。")
+    fileSize: int = Field(default=0, description="当前已统计到的 HLS 分片文件总大小，单位：字节。同步 stop 返回阶段可能还是 0，最终值以后台收尾完成后的回调或状态查询为准。")
+    durationSeconds: float = Field(default=0.0, description="当前已统计到的 HLS 可播放时长，单位：秒。同步 stop 返回阶段可能还是 0，最终值以后台收尾完成后的回调或状态查询为准。")
     codec: str = Field(default="", description="视频编码。常见值：`h264`、`hevc`；无法探测时为空字符串。")
     errorMessage: str = Field(default="", description="失败原因。没有错误时为空字符串。")
 
@@ -90,7 +132,7 @@ class MobileRecordExtendData(BaseModel):
 
 class MobileRecordClassroomStatusResponse(BaseModel):
     code: str = Field(default="SUCCESS", description="业务结果码。固定值：`SUCCESS`=成功；`FAILED`=失败。")
-    message: str = Field(default="查询成功", description="业务提示信息。成功固定为“查询成功”；失败时返回具体原因，例如查询教室录制占用状态失败。")
+    message: str = Field(default="查询成功", description="业务提示信息。成功固定为“查询成功”；失败时返回实际错误信息，例如“查询教室录制占用状态失败：数据库连接异常”。")
     data: MobileRecordClassroomStatusData = Field(..., description="教室录制占用状态。")
 
 
@@ -114,14 +156,30 @@ class MobileRecordExtendResponse(BaseModel):
 
 class MobileRecordStatusResponse(BaseModel):
     code: str = Field(default="SUCCESS", description="业务结果码。固定值：`SUCCESS`=成功；`FAILED`=失败。")
-    message: str = Field(default="查询成功", description="业务提示信息。成功固定为“查询成功”；失败时返回具体原因，例如查询移动录制任务状态失败。")
+    message: str = Field(default="查询成功", description="业务提示信息。成功固定为“查询成功”；失败时返回实际错误信息，例如“查询移动录制任务状态失败：数据库连接异常”。")
     data: MobileRecordTaskStatusData = Field(..., description="任务状态详情。")
 
 
 class MobileRecordListResponse(BaseModel):
     code: str = Field(default="SUCCESS", description="业务结果码。固定值：`SUCCESS`=成功；`FAILED`=失败。")
-    message: str = Field(default="查询成功", description="业务提示信息。成功固定为“查询成功”；失败时返回具体原因，例如查询移动录制任务列表失败。")
+    message: str = Field(default="查询成功", description="业务提示信息。成功固定为“查询成功”；失败时返回实际错误信息，例如“查询移动录制任务列表失败：数据库连接异常”。")
     data: MobileRecordTaskListData = Field(..., description="任务列表数据。")
+
+
+class MobileRecordPlayCloseData(BaseModel):
+    taskId: str = Field(default="", description="移动录制任务ID。")
+    closed: bool = Field(default=False, description="是否关闭了播放会话。固定值：`true`=已关闭或已释放播放会话；`false`=任务ID为空或关闭失败。")
+
+
+class MobileRecordPlayCloseResponse(BaseModel):
+    code: str = Field(default="SUCCESS", description="业务结果码。固定值：`SUCCESS`=成功；`FAILED`=失败。")
+    message: str = Field(default="关闭播放会话成功", description="业务提示信息。成功固定为“关闭播放会话成功”；失败时返回实际错误信息，例如“taskId 不能为空”。")
+    data: MobileRecordPlayCloseData = Field(..., description="关闭播放会话结果。")
+
+
+class MobileRecordDeleteResponse(BaseModel):
+    code: str = Field(default="SUCCESS", description="业务结果码。固定值：`SUCCESS`=删除成功；`FAILED`=删除失败。")
+    message: str = Field(default="删除成功", description="业务提示信息。`code=SUCCESS` 时固定为“删除成功”；`code=FAILED` 时返回实际失败原因，例如“删除失败：录制任务不存在”。")
 
 
 class MobileRecordStartRequest(BaseModel):
@@ -204,8 +262,35 @@ class MobileRecordExtendRequest(BaseModel):
     }
 
 
+class MobileRecordPlayCloseRequest(BaseModel):
+    taskId: str = Field(..., description="格式：string。要关闭播放会话的移动录制任务ID，与播放接口 `/api/mobile-record/play/{task_id}` 中的 task_id 一致。示例：`record_20260605_001`。")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "taskId": "record_20260605_001",
+            }
+        }
+    }
+
+
+class MobileRecordDeleteRequest(BaseModel):
+    taskId: str = Field(..., description="格式：string。要删除本地录制文件的移动录制任务ID，必须与 start 接口传入的 taskId 一致。示例：`record_20260605_001`。")
+    operatorUserId: str = Field(default="", description="格式：string。发起删除操作的人ID，可为空字符串；用于日志追踪。示例：`u_001`。")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "taskId": "record_20260605_001",
+                "operatorUserId": "u_001",
+            }
+        }
+    }
+
+
 def create_mobile_record_router(*, service) -> APIRouter:
     router = APIRouter()
+    play_sessions: set[str] = set()
 
     def _base_url(request: Request) -> str:
         return str(request.base_url).rstrip("/")
@@ -260,6 +345,9 @@ def create_mobile_record_router(*, service) -> APIRouter:
 
     def _stop_message(action: str, ok: bool, data: dict[str, Any]) -> str:
         if ok:
+            status = str(data.get("status") or "").strip()
+            if status == "stopping":
+                return "取消录制请求已受理，正在停止中" if action == "cancel" else "停止录制请求已受理，正在停止中"
             return "取消录制成功" if action == "cancel" else "停止录制成功"
         code = str(data.get("code") or "").strip()
         message = str(data.get("message") or "").strip()
@@ -371,6 +459,18 @@ def create_mobile_record_router(*, service) -> APIRouter:
             "maxEndTime": str(item.get("maxEndTime") or ""),
         }
 
+    def _rewrite_mobile_hls_playlist(task_id: str, raw: str) -> str:
+        lines: list[str] = []
+        quoted_task_id = quote(str(task_id or ""), safe="")
+        for line in str(raw or "").splitlines():
+            item = line.strip()
+            if not item or item.startswith("#") or "://" in item or item.startswith("/"):
+                lines.append(line)
+                continue
+            safe_name = PurePosixPath(item).name
+            lines.append(f"/api/mobile-record/play/{quoted_task_id}/{quote(safe_name, safe='')}")
+        return "\n".join(lines) + "\n"
+
     @router.get(
         "/api/mobile-record/classrooms/status",
         summary="查询教室录制占用状态",
@@ -387,17 +487,25 @@ def create_mobile_record_router(*, service) -> APIRouter:
             "- `FAILED`：查询失败。\n\n"
             "message 场景：\n"
             "- `查询成功`：已成功返回教室占用状态。\n"
-            "- `查询教室录制占用状态失败：具体原因`：查询过程中发生异常。"
+            "- `查询教室录制占用状态失败：实际错误信息`：查询过程中发生异常。"
         ),
     )
     async def api_mobile_record_classrooms_status(
+        request: Request,
         classroomIds: str = Query(default="", description="格式：string。逗号分隔的教室ID列表，例如 `room_301,room_302`。用于批量刷新这些教室当前是否被占用；为空时返回当前所有录制中的教室。"),
     ):
+        _log_request("CLASSROOMS_STATUS request", request, classroomIds=str(classroomIds or ""))
         try:
             ids = [item.strip() for item in str(classroomIds or "").split(",") if item.strip()]
-            return _json({"items": [_classroom_item(item) for item in service.classroom_statuses(ids)]}, code="SUCCESS", message="查询成功")
+            items = {"items": [_classroom_item(item) for item in service.classroom_statuses(ids)]}
+            response = _json(items, code="SUCCESS", message="查询成功")
+            _log_response("CLASSROOMS_STATUS response", request, code="SUCCESS", message="查询成功", status_code=response.status_code, itemCount=len(items["items"]))
+            return response
         except Exception as exc:
-            return _json({"items": []}, code="FAILED", message=f"查询教室录制占用状态失败：{exc}", status_code=500)
+            message = f"查询教室录制占用状态失败：{exc}"
+            response = _json({"items": []}, code="FAILED", message=message, status_code=500)
+            _log_response("CLASSROOMS_STATUS response", request, code="FAILED", message=message, status_code=response.status_code)
+            return response
 
     @router.post(
         "/api/mobile-record/start",
@@ -443,13 +551,13 @@ def create_mobile_record_router(*, service) -> APIRouter:
             "- `磁盘已满或剩余空间不足`：录制目录所在磁盘空间不足，无法继续写入 HLS 文件。\n"
             "- `录像设备取流失败`：录像设备无法建立实时流、RTSP 地址不可用、网络超时或无法输出首包。\n"
             "- `接口服务未启动`：边缘服务接口不可访问。说明：如果请求已经到达本接口，通常不会由本接口返回该提示。\n"
-            "- `录制进程或依赖服务启动失败：具体原因`：ffmpeg 或录制依赖启动失败。\n"
+            "- `录制进程或依赖服务启动失败：实际错误信息`：ffmpeg 或录制依赖启动失败。\n"
             "- `任务ID重复`：taskId 已存在，不能重复启动同一个录制任务。\n"
             "- `教室已被占用`：classroomId 对应教室已有进行中的录制任务。\n"
             "- `当前通道/教室已有录制任务`：同一个 NVR 设备和通道已有进行中的录制任务，用于防止前端传错 classroomId 时同一物理教室被重复录制。\n"
             "- `录制人有进行中的录制任务`：recordUserId 已有另一个进行中的录制任务。\n"
-            "- `录制参数错误：具体原因`：必要参数缺失或参数不合法。\n"
-            "- `其他原因：具体原因`：未归类的启动失败。"
+            "- `录制参数错误：实际错误信息`：必要参数缺失或参数不合法。\n"
+            "- `其他原因：实际错误信息`：未归类的启动失败。"
         ),
     )
     async def api_mobile_record_start(req: MobileRecordStartRequest, request: Request):
@@ -457,53 +565,75 @@ def create_mobile_record_router(*, service) -> APIRouter:
         try:
             client_ip = request.client.host if request.client else ""
             payload["__clientIp"] = str(client_ip or "")
-            _log.info(
-                "START client_ip=%s taskId=%s campusCode=%s classroomId=%s nvrDeviceId=%s nvrIp=%s nvrPort=%s "
-                "nvrAccount=%s nvrPassword=%s nvrChannelId=%s nvrChannelNum=%s recordUserId=%s recordUserName=%s estimatedDurationSeconds=%s callbackUrl(deprecated)=%s",
-                client_ip,
-                str(payload.get("taskId") or ""),
-                str(payload.get("campusCode") or ""),
-                str(payload.get("classroomId") or ""),
-                payload.get("nvrDeviceId"),
-                str(payload.get("ipAddress") or ""),
-                payload.get("port"),
-                str(payload.get("account") or ""),
-                _mask_secret(payload.get("password")),
-                str(payload.get("nvrChannelId") or ""),
-                payload.get("nvrChannelNum"),
-                str(payload.get("recordUserId") or ""),
-                str(payload.get("recordUserName") or ""),
-                payload.get("estimatedDurationSeconds"),
-                str(payload.get("callbackUrl") or ""),
+            _log_request(
+                "START request",
+                request,
+                taskId=str(payload.get("taskId") or ""),
+                campusCode=str(payload.get("campusCode") or ""),
+                classroomId=str(payload.get("classroomId") or ""),
+                nvrDeviceId=payload.get("nvrDeviceId"),
+                nvrIp=str(payload.get("ipAddress") or ""),
+                nvrPort=payload.get("port"),
+                nvrAccount=str(payload.get("account") or ""),
+                nvrPassword=_mask_secret(payload.get("password")),
+                nvrChannelId=str(payload.get("nvrChannelId") or ""),
+                nvrChannelNum=payload.get("nvrChannelNum"),
+                recordUserId=str(payload.get("recordUserId") or ""),
+                recordUserName=str(payload.get("recordUserName") or ""),
+                estimatedDurationSeconds=payload.get("estimatedDurationSeconds"),
+                callbackUrlDeprecated=str(payload.get("callbackUrl") or ""),
             )
             ok, data, status = await service.start_recording(payload, request_base_url=_base_url(request))
         except ValueError as exc:
             _queue_start_failure_callback(payload, f"录制参数错误：{exc}")
-            return _start_failed(f"录制参数错误：{exc}", status_code=400)
+            message = f"录制参数错误：{exc}"
+            response = _start_failed(message, status_code=400)
+            _log_response("START response", request, code="FAILED", message=message, status_code=response.status_code, taskId=str(payload.get("taskId") or ""))
+            return response
         except OSError as exc:
             if _is_disk_full_error(exc):
                 _queue_start_failure_callback(payload, "磁盘已满或剩余空间不足")
-                return _start_failed("磁盘已满或剩余空间不足", status_code=507)
+                response = _start_failed("磁盘已满或剩余空间不足", status_code=507)
+                _log_response("START response", request, code="FAILED", message="磁盘已满或剩余空间不足", status_code=response.status_code, taskId=str(payload.get("taskId") or ""))
+                return response
             _queue_start_failure_callback(payload, f"录制进程或依赖服务启动失败：{exc}")
-            return _start_failed(f"录制进程或依赖服务启动失败：{exc}", status_code=500)
+            message = f"录制进程或依赖服务启动失败：{exc}"
+            response = _start_failed(message, status_code=500)
+            _log_response("START response", request, code="FAILED", message=message, status_code=response.status_code, taskId=str(payload.get("taskId") or ""))
+            return response
         except Exception as exc:
             if _is_disk_full_error(exc):
                 _queue_start_failure_callback(payload, "磁盘已满或剩余空间不足")
-                return _start_failed("磁盘已满或剩余空间不足", status_code=507)
+                response = _start_failed("磁盘已满或剩余空间不足", status_code=507)
+                _log_response("START response", request, code="FAILED", message="磁盘已满或剩余空间不足", status_code=response.status_code, taskId=str(payload.get("taskId") or ""))
+                return response
             if _is_service_start_error(exc):
                 _queue_start_failure_callback(payload, f"录制进程或依赖服务启动失败：{exc}")
-                return _start_failed(f"录制进程或依赖服务启动失败：{exc}", status_code=500)
+                message = f"录制进程或依赖服务启动失败：{exc}"
+                response = _start_failed(message, status_code=500)
+                _log_response("START response", request, code="FAILED", message=message, status_code=response.status_code, taskId=str(payload.get("taskId") or ""))
+                return response
             if _is_network_error(exc):
                 _queue_start_failure_callback(payload, "录像设备取流失败")
-                return _start_failed("录像设备取流失败", status_code=502)
+                response = _start_failed("录像设备取流失败", status_code=502)
+                _log_response("START response", request, code="FAILED", message="录像设备取流失败", status_code=response.status_code, taskId=str(payload.get("taskId") or ""))
+                return response
             _queue_start_failure_callback(payload, f"其他原因：{exc}")
-            return _start_failed(f"其他原因：{exc}", status_code=500)
+            message = f"其他原因：{exc}"
+            response = _start_failed(message, status_code=500)
+            _log_response("START response", request, code="FAILED", message=message, status_code=response.status_code, taskId=str(payload.get("taskId") or ""))
+            return response
         if ok:
-            return _start_json("SUCCESS", "启动录制成功", _start_data(data), status_code=status)
+            response = _start_json("SUCCESS", "启动录制成功", _start_data(data), status_code=status)
+            _log_response("START response", request, code="SUCCESS", message="启动录制成功", status_code=response.status_code, taskId=str(payload.get("taskId") or ""), status=str(data.get("status") or ""))
+            return response
         failure_code = str(data.get("code") or "").strip()
         failure_message = str(data.get("message") or "").strip()
-        _queue_start_failure_callback(payload, _service_start_failure_message(failure_code, failure_message))
-        return _start_failed(_service_start_failure_message(failure_code, failure_message), status_code=status)
+        final_message = _service_start_failure_message(failure_code, failure_message)
+        _queue_start_failure_callback(payload, final_message)
+        response = _start_failed(final_message, status_code=status)
+        _log_response("START response", request, code="FAILED", message=final_message, status_code=response.status_code, taskId=str(payload.get("taskId") or ""))
+        return response
 
     @router.post(
         "/api/mobile-record/stop",
@@ -511,6 +641,7 @@ def create_mobile_record_router(*, service) -> APIRouter:
         response_model=MobileRecordStopResponse,
         description=(
             "停止录制任务。action=finish 表示结束并保留HLS文件，action=cancel 表示取消录制并删除本地文件。"
+            "接口会先快速受理停止请求并返回，真正的收尾、统计和最终状态落库在后台继续完成。"
             "接口幂等，已结束任务重复调用会返回当前最终状态。\n\n"
             "字段解释：\n"
             "- `taskId`：格式 string，要停止的移动录制任务ID。\n"
@@ -518,28 +649,43 @@ def create_mobile_record_router(*, service) -> APIRouter:
             "- `operatorUserId`：格式 string，可为空，用于记录是谁发起停止或取消。\n"
             "- `stopReason`：格式 string enum，人工调用 finish 时通常为 `manual`；人工调用 cancel 时通常为 `cancel`。`auto_timeout` 只用于边缘服务内部自动停止，不允许服务端手动传。\n\n"
             "返回 code：\n"
-            "- `SUCCESS`：停止/取消成功，或任务已经处于最终状态。\n"
+            "- `SUCCESS`：停止/取消请求已受理，或任务已经处于最终状态。\n"
             "- `FAILED`：停止/取消失败。\n\n"
             "message 场景：\n"
-            "- `停止录制成功`：action=finish，录制已结束并保留本地 HLS 文件。\n"
-            "- `取消录制成功`：action=cancel，录制已取消并删除本地文件。\n"
+            "- `停止录制请求已受理，正在停止中`：action=finish，边缘服务已开始停止录制，最终结果以后续回调或状态查询为准。\n"
+            "- `取消录制请求已受理，正在停止中`：action=cancel，边缘服务已开始取消录制，最终结果以后续回调或状态查询为准。\n"
+            "- `停止录制成功` / `取消录制成功`：任务本身已经完成，再次调用时直接返回当前最终状态。\n"
             "- `参数错误：action 仅支持 finish 或 cancel`：action 不是允许值。\n"
             "- `参数错误：auto_timeout 仅用于边缘服务内部自动停止，服务端接口不要手动传`：服务端错误传入内部原因。\n"
             "- `参数错误：action=finish 时 stopReason 不能传 cancel`：停止方式和原因冲突。\n"
             "- `录制任务不存在`：taskId 不存在。\n"
             "- `停止后文件不可用`：正常结束后 HLS 文件未生成或不可用。\n"
-            "- `停止录制失败：具体原因`：其他停止失败原因。"
+            "- `停止录制失败：实际错误信息`：其他停止失败原因。"
         ),
     )
     async def api_mobile_record_stop(req: MobileRecordStopRequest, request: Request):
         action = str(req.action or "finish").strip().lower()
+        _log_request(
+            "STOP request",
+            request,
+            taskId=str(req.taskId or ""),
+            action=action,
+            operatorUserId=str(req.operatorUserId or ""),
+            stopReason=str(req.stopReason or ""),
+        )
         if action not in {"finish", "cancel"}:
-            return _json(code="FAILED", message="参数错误：action 仅支持 finish 或 cancel", status_code=400)
+            response = _json(code="FAILED", message="参数错误：action 仅支持 finish 或 cancel", status_code=400)
+            _log_response("STOP response", request, code="FAILED", message="参数错误：action 仅支持 finish 或 cancel", status_code=response.status_code, taskId=str(req.taskId or ""), action=action)
+            return response
         requested_reason = str(req.stopReason or "").strip().lower()
         if requested_reason == "auto_timeout":
-            return _json(code="FAILED", message="参数错误：auto_timeout 仅用于边缘服务内部自动停止，服务端接口不要手动传", status_code=400)
+            response = _json(code="FAILED", message="参数错误：auto_timeout 仅用于边缘服务内部自动停止，服务端接口不要手动传", status_code=400)
+            _log_response("STOP response", request, code="FAILED", message="参数错误：auto_timeout 仅用于边缘服务内部自动停止，服务端接口不要手动传", status_code=response.status_code, taskId=str(req.taskId or ""), action=action)
+            return response
         if action == "finish" and requested_reason == "cancel":
-            return _json(code="FAILED", message="参数错误：action=finish 时 stopReason 不能传 cancel", status_code=400)
+            response = _json(code="FAILED", message="参数错误：action=finish 时 stopReason 不能传 cancel", status_code=400)
+            _log_response("STOP response", request, code="FAILED", message="参数错误：action=finish 时 stopReason 不能传 cancel", status_code=response.status_code, taskId=str(req.taskId or ""), action=action)
+            return response
         reason = requested_reason or ("cancel" if action == "cancel" else "manual")
         if action == "cancel":
             reason = "cancel"
@@ -552,8 +698,15 @@ def create_mobile_record_router(*, service) -> APIRouter:
                 request_base_url=_base_url(request),
             )
         except Exception as exc:
-            return _json(_stop_data({}), code="FAILED", message=f"停止录制失败：{exc}", status_code=500)
-        return _json(_stop_data(data), code=("SUCCESS" if ok else "FAILED"), message=_stop_message(action, ok, data), status_code=status)
+            message = f"停止录制失败：{exc}"
+            response = _json(_stop_data({}), code="FAILED", message=message, status_code=500)
+            _log_response("STOP response", request, code="FAILED", message=message, status_code=response.status_code, taskId=str(req.taskId or ""), action=action)
+            return response
+        message = _stop_message(action, ok, data)
+        code = "SUCCESS" if ok else "FAILED"
+        response = _json(_stop_data(data), code=code, message=message, status_code=status)
+        _log_response("STOP response", request, code=code, message=message, status_code=response.status_code, taskId=str(req.taskId or ""), action=action, taskStatus=str(data.get("status") or ""))
+        return response
 
     @router.post(
         "/api/mobile-record/extend",
@@ -572,15 +725,29 @@ def create_mobile_record_router(*, service) -> APIRouter:
             "- `延长录制成功`：录制任务仍在进行中，预计自动停止时间已延后。\n"
             "- `录制任务不存在`：taskId 不存在。\n"
             "- `任务不是录制中，不能延长`：任务已完成、已取消、失败、中断或正在停止，不能继续延长。\n"
-            "- `延长录制失败：具体原因`：其他延长失败原因。"
+            "- `延长录制失败：实际错误信息`：其他延长失败原因。"
         ),
     )
-    async def api_mobile_record_extend(req: MobileRecordExtendRequest):
+    async def api_mobile_record_extend(req: MobileRecordExtendRequest, request: Request):
+        _log_request(
+            "EXTEND request",
+            request,
+            taskId=str(req.taskId or ""),
+            extendSeconds=int(req.extendSeconds or 0),
+            operatorUserId=str(req.operatorUserId or ""),
+        )
         try:
             ok, data, status = await service.extend_recording(req.taskId, req.extendSeconds, req.operatorUserId)
         except Exception as exc:
-            return _json(_extend_data({}), code="FAILED", message=f"延长录制失败：{exc}", status_code=500)
-        return _json(_extend_data(data), code=("SUCCESS" if ok else "FAILED"), message=_extend_message(ok, data), status_code=status)
+            message = f"延长录制失败：{exc}"
+            response = _json(_extend_data({}), code="FAILED", message=message, status_code=500)
+            _log_response("EXTEND response", request, code="FAILED", message=message, status_code=response.status_code, taskId=str(req.taskId or ""))
+            return response
+        message = _extend_message(ok, data)
+        code = "SUCCESS" if ok else "FAILED"
+        response = _json(_extend_data(data), code=code, message=message, status_code=status)
+        _log_response("EXTEND response", request, code=code, message=message, status_code=response.status_code, taskId=str(req.taskId or ""), taskStatus=str(data.get("status") or ""))
+        return response
 
     @router.get(
         "/api/mobile-record/status",
@@ -601,7 +768,7 @@ def create_mobile_record_router(*, service) -> APIRouter:
             "- `FAILED`：查询失败。\n\n"
             "message 场景：\n"
             "- `查询成功`：已返回任务状态。任务不存在时也会正常返回空状态数据，code 仍为 SUCCESS。\n"
-            "- `查询移动录制任务状态失败：具体原因`：查询过程中发生异常。"
+            "- `查询移动录制任务状态失败：实际错误信息`：查询过程中发生异常。"
         ),
     )
     async def api_mobile_record_status(
@@ -609,11 +776,17 @@ def create_mobile_record_router(*, service) -> APIRouter:
         taskId: str = Query(default="", description="格式：string。录制任务ID。传这个时，查询这个任务的详细状态。示例：`record_20260605_001`。"),
         classroomId: str = Query(default="", description="格式：string。教室ID。传这个时，查询这个教室当前是否有进行中的录制。示例：`room_301`。"),
     ):
+        _log_request("STATUS request", request, taskId=str(taskId or ""), classroomId=str(classroomId or ""))
         try:
             data = service.get_status(task_id=taskId, classroom_id=classroomId, request_base_url=_base_url(request))
-            return _json(_task_status_data(data), code="SUCCESS", message="查询成功")
+            response = _json(_task_status_data(data), code="SUCCESS", message="查询成功")
+            _log_response("STATUS response", request, code="SUCCESS", message="查询成功", status_code=response.status_code, taskId=str(data.get("taskId") or taskId or ""), taskStatus=str(data.get("status") or ""))
+            return response
         except Exception as exc:
-            return _json(_task_status_data({}), code="FAILED", message=f"查询移动录制任务状态失败：{exc}", status_code=500)
+            message = f"查询移动录制任务状态失败：{exc}"
+            response = _json(_task_status_data({}), code="FAILED", message=message, status_code=500)
+            _log_response("STATUS response", request, code="FAILED", message=message, status_code=response.status_code, taskId=str(taskId or ""), classroomId=str(classroomId or ""))
+            return response
 
     @router.get(
         "/api/mobile-record/list",
@@ -633,44 +806,157 @@ def create_mobile_record_router(*, service) -> APIRouter:
             "- `FAILED`：查询失败。\n\n"
             "message 场景：\n"
             "- `查询成功`：已返回符合条件的任务列表。没有匹配任务时 items 为空数组，code 仍为 SUCCESS。\n"
-            "- `查询移动录制任务列表失败：具体原因`：查询过程中发生异常。"
+            "- `查询移动录制任务列表失败：实际错误信息`：查询过程中发生异常。"
         ),
     )
     async def api_mobile_record_list(
+        request: Request,
         classroomId: str = Query(default="", description="格式：string。按教室ID过滤，可为空。示例：`room_301`。"),
         recordUserId: str = Query(default="", description="格式：string。按录制人ID过滤，可为空。示例：`u_001`。"),
         status: str = Query(default="", description="格式：string enum。按任务状态过滤，可为空；例如 `recording`、`finished`、`cancelled`、`failed`、`interrupted`。"),
         date: str = Query(default="", description="格式：string。按开始日期过滤，可为空；格式 `YYYY-MM-DD`，例如 `2026-06-11`。"),
         limit: int = Query(default=100, description="格式：int。最多返回多少条记录，默认 `100`。"),
     ):
+        _log_request(
+            "LIST request",
+            request,
+            classroomId=str(classroomId or ""),
+            recordUserId=str(recordUserId or ""),
+            status=str(status or ""),
+            date=str(date or ""),
+            limit=int(limit or 0),
+        )
         try:
             items = service.list_tasks(classroom_id=classroomId, record_user_id=recordUserId, status=status, date=date, limit=limit)
-            return _json({"items": [_task_status_data(item) for item in items]}, code="SUCCESS", message="查询成功")
+            response = _json({"items": [_task_status_data(item) for item in items]}, code="SUCCESS", message="查询成功")
+            _log_response("LIST response", request, code="SUCCESS", message="查询成功", status_code=response.status_code, itemCount=len(items))
+            return response
         except Exception as exc:
-            return _json({"items": []}, code="FAILED", message=f"查询移动录制任务列表失败：{exc}", status_code=500)
+            message = f"查询移动录制任务列表失败：{exc}"
+            response = _json({"items": []}, code="FAILED", message=message, status_code=500)
+            _log_response("LIST response", request, code="FAILED", message=message, status_code=response.status_code)
+            return response
+
+    @router.get(
+        "/api/mobile-record/play/{task_id}",
+        summary="播放移动录制文件",
+        description=(
+            "H5拿到playUrl后直接访问。接口只需要传移动录制任务ID，边缘服务会返回该任务的 HLS 播放入口。\n\n"
+            "路径说明：\n"
+            "- `task_id`：格式 string，录制任务ID。\n"
+            "返回说明：\n"
+            "- 成功：直接返回 HLS m3u8 内容，媒体类型为 `application/vnd.apple.mpegurl`。\n"
+            "- JSON 错误 code：`FAILED`=任务未完成或播放文件不存在。\n\n"
+            "message 场景：\n"
+            "- 成功时不返回 JSON，直接返回文件流。\n"
+            "- `录制文件不存在或尚未生成`：任务未完成或 index.m3u8 不存在。"
+        ),
+    )
+    async def api_mobile_record_play(task_id: str, request: Request):
+        _log_request("PLAY request", request, taskId=str(task_id or ""), path="index.m3u8")
+        file_path = service.resolve_play_file(task_id, "index.m3u8")
+        if file_path is None:
+            response = _json(code="FAILED", message="录制文件不存在或尚未生成", status_code=404)
+            _log_response("PLAY response", request, code="FAILED", message="录制文件不存在或尚未生成", status_code=response.status_code, taskId=str(task_id or ""))
+            return response
+        raw = file_path.read_text(encoding="utf-8", errors="ignore")
+        play_sessions.add(str(task_id or "").strip())
+        response = Response(
+            content=_rewrite_mobile_hls_playlist(task_id, raw),
+            media_type="application/vnd.apple.mpegurl",
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
+        _log_response("PLAY response", request, code="SUCCESS", message="播放文件返回成功", status_code=response.status_code, taskId=str(task_id or ""), path="index.m3u8")
+        return response
 
     @router.get(
         "/api/mobile-record/play/{task_id}/{path:path}",
-        summary="播放移动录制HLS文件",
-        description=(
-            "H5拿到playUrl后直接访问。仅 finished 状态任务允许读取 index.m3u8 和 segment_*.ts。\n\n"
-            "路径说明：\n"
-            "- `task_id`：格式 string，录制任务ID。\n"
-            "- `path`：格式 string，录制目录下的相对文件路径，通常是 `index.m3u8`，也可能是某个 `.ts` 分片。\n\n"
-            "返回说明：\n"
-            "- 成功：直接返回 HLS 文件流，`index.m3u8` 的媒体类型为 `application/vnd.apple.mpegurl`，`.ts` 分片的媒体类型为 `video/mp2t`。\n"
-            "- JSON 错误 code：`FAILED`=任务未完成、文件不存在或路径不合法。\n\n"
-            "message 场景：\n"
-            "- 成功时不返回 JSON，直接返回文件流。\n"
-            "- `录制文件不存在或尚未生成`：任务未完成、文件不存在或路径不合法。"
-        ),
+        include_in_schema=False,
     )
-    async def api_mobile_record_play(task_id: str, path: str):
+    async def api_mobile_record_play_file(task_id: str, path: str, request: Request):
+        _log_request("PLAY_FILE request", request, taskId=str(task_id or ""), path=str(path or "index.m3u8"))
         file_path = service.resolve_play_file(task_id, path or "index.m3u8")
         if file_path is None:
-            return _json(code="FAILED", message="录制文件不存在或尚未生成", status_code=404)
+            response = _json(code="FAILED", message="录制文件不存在或尚未生成", status_code=404)
+            _log_response("PLAY_FILE response", request, code="FAILED", message="录制文件不存在或尚未生成", status_code=response.status_code, taskId=str(task_id or ""), path=str(path or "index.m3u8"))
+            return response
         suffix = file_path.suffix.lower()
         media_type = "application/vnd.apple.mpegurl" if suffix == ".m3u8" else ("video/mp2t" if suffix == ".ts" else "application/octet-stream")
-        return FileResponse(str(file_path), media_type=media_type)
+        response = FileResponse(str(file_path), media_type=media_type, headers={"Cache-Control": "no-store", "Pragma": "no-cache", "Content-Disposition": "inline"})
+        _log_response("PLAY_FILE response", request, code="SUCCESS", message="播放文件返回成功", status_code=response.status_code, taskId=str(task_id or ""), path=str(path or "index.m3u8"))
+        return response
+
+    @router.post(
+        "/api/mobile-record/play/close",
+        summary="关闭移动录制播放会话",
+        response_model=MobileRecordPlayCloseResponse,
+        description=(
+            "H5停止播放移动录制文件后调用，用于释放边缘服务记录的播放会话状态。"
+            "移动录制播放当前是静态 HLS 文件读取，不会常驻 ffmpeg 进程；调用本接口主要用于让边缘服务及时清理播放会话标记。\n\n"
+            "字段解释：\n"
+            "- `taskId`：格式 string，要关闭播放会话的移动录制任务ID。\n\n"
+            "返回 code：\n"
+            "- `SUCCESS`：关闭播放会话成功。\n"
+            "- `FAILED`：关闭失败，通常是 `taskId` 为空。"
+        ),
+    )
+    async def api_mobile_record_play_close(req: MobileRecordPlayCloseRequest, request: Request):
+        _log_request("PLAY_CLOSE request", request, taskId=str(req.taskId or ""))
+        task_id = str(req.taskId or "").strip()
+        if not task_id:
+            response = _json({"taskId": "", "closed": False}, code="FAILED", message="taskId 不能为空", status_code=400)
+            _log_response("PLAY_CLOSE response", request, code="FAILED", message="taskId 不能为空", status_code=response.status_code, taskId="")
+            return response
+        play_sessions.discard(task_id)
+        response = _json({"taskId": task_id, "closed": True}, code="SUCCESS", message="关闭播放会话成功")
+        _log_response("PLAY_CLOSE response", request, code="SUCCESS", message="关闭播放会话成功", status_code=response.status_code, taskId=task_id)
+        return response
+
+    @router.post(
+        "/api/mobile-record/delete",
+        summary="删除移动录制本地文件",
+        response_model=MobileRecordDeleteResponse,
+        description=(
+            "删除指定移动录制任务在边缘服务本机生成的 HLS 源文件目录。"
+            "本接口只删除本地录制文件，不删除任务记录；删除请求通过校验后会立即返回，文件删除和记录清空在后台执行。"
+            "后台删除完成后，该任务的 playUrl、分片数量、文件大小和时长会被清空。\n\n"
+            "字段解释：\n"
+            "- `taskId`：格式 string，要删除文件的移动录制任务ID。\n"
+            "- `operatorUserId`：格式 string，可为空，用于记录是谁发起删除。\n\n"
+            "业务规则：\n"
+            "- 录制中或停止中的任务不允许删除，必须先结束或取消。\n"
+            "- 如果有用户正在播放该录制文件，删除接口仍会直接受理；播放器后续请求已删除的 m3u8 或 ts 分片时会出现加载失败。\n"
+            "- 只允许删除边缘服务移动录制根目录下的任务目录，避免误删其他文件。\n\n"
+            "返回 code：\n"
+            "- `SUCCESS`：删除成功，message 固定为“删除成功”。\n"
+            "- `FAILED`：删除失败。\n\n"
+            "message 场景：\n"
+            "- `删除成功`：删除请求已受理；本地文件会在后台删除，任务目录本来不存在时也按成功处理。\n"
+            "- `删除失败：taskId 不能为空`：taskId 为空。\n"
+            "- `删除失败：录制任务不存在`：taskId 不存在。\n"
+            "- `删除失败：任务正在录制或停止中，请先结束后再删除`：任务仍在写文件或正在收尾。\n"
+            "- `删除失败：录制目录不在允许删除范围内：路径`：任务记录中的目录异常，为避免误删已拒绝。\n"
+            "- `删除失败：系统异常信息`：接口受理前发生其他异常。"
+        ),
+    )
+    async def api_mobile_record_delete(req: MobileRecordDeleteRequest, request: Request):
+        _log_request("DELETE request", request, taskId=str(req.taskId or ""), operatorUserId=str(req.operatorUserId or ""))
+        try:
+            ok, data, status = await service.delete_recording_files(req.taskId, operator_user_id=req.operatorUserId)
+        except Exception as exc:
+            message = f"删除失败：{exc}"
+            response = JSONResponse({"code": "FAILED", "message": message}, status_code=500)
+            _log_response("DELETE response", request, code="FAILED", message=message, status_code=response.status_code, taskId=str(req.taskId or ""))
+            return response
+        if ok:
+            response = JSONResponse({"code": "SUCCESS", "message": "删除成功"}, status_code=status)
+            _log_response("DELETE response", request, code="SUCCESS", message="删除成功", status_code=response.status_code, taskId=str(req.taskId or ""))
+            return response
+        message = str(data.get("message") or "删除失败")
+        if not message.startswith("删除失败"):
+            message = f"删除失败：{message}"
+        response = JSONResponse({"code": "FAILED", "message": message}, status_code=status)
+        _log_response("DELETE response", request, code="FAILED", message=message, status_code=response.status_code, taskId=str(req.taskId or ""))
+        return response
 
     return router

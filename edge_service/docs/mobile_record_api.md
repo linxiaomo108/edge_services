@@ -203,7 +203,7 @@ Content-Type: application/json
   "data": {
     "taskId": "record_20260605_001",
     "status": "recording",
-    "playUrl": "http://edge.example.com/api/mobile-record/play/record_20260605_001/index.m3u8",
+    "playUrl": "http://edge.example.com/api/mobile-record/play/record_20260605_001",
     "startTime": "2026-06-05T10:00:00+08:00",
     "maxEndTime": "2026-06-05T11:00:00+08:00",
     "elapsedSeconds": 0,
@@ -267,9 +267,12 @@ Content-Type: application/json
 
 ### 业务说明
 
-- `action=finish`：正常结束录制。边缘服务会停止 ffmpeg、校验 HLS、保留文件，并生成 `playUrl`。
-- `action=cancel`：取消录制。边缘服务会停止 ffmpeg，并删除本地录制目录，状态变成 `cancelled`。
-- 接口幂等，已结束任务重复调用会返回当前最终状态。
+- `action=finish`：边缘服务会先快速受理停止请求，立即把任务切到 `stopping`，随后在后台停止 ffmpeg、校验 HLS、保留文件，并生成最终 `playUrl`。
+- `action=cancel`：边缘服务会先快速受理取消请求，立即把任务切到 `stopping`，随后在后台停止 ffmpeg，并删除本地录制目录，最终状态变成 `cancelled`。
+- 接口幂等，已结束任务重复调用会直接返回当前最终状态。
+- 这个接口的同步返回只表示“停止请求已受理”，最终文件统计和最终状态以后台回调和状态查询为准。
+- 同步返回时，`status` 可能先是 `stopping`，`playUrl/segmentCount/fileSize/durationSeconds` 可能暂时还是空或 0。
+- 如果要确认最终结果，请再调 `GET /api/mobile-record/status` 或等待边缘服务回调服务端的最终结果。
 
 ## 4. 延长移动录制时长
 
@@ -373,7 +376,7 @@ GET /api/mobile-record/list?classroomId=room_301&recordUserId=u_001&status=finis
 播放地址由 `start/status/stop` 返回：
 
 ```text
-http://{edgeHost}:18080/api/mobile-record/play/{taskId}/index.m3u8
+http://{edgeHost}:18080/api/mobile-record/play/{taskId}
 ```
 
 ### 说明
@@ -381,7 +384,96 @@ http://{edgeHost}:18080/api/mobile-record/play/{taskId}/index.m3u8
 - H5 直接访问边缘服务公网映射地址。
 - 只有 `finished` 状态任务允许读取 HLS 文件。
 - `taskId` 是录制任务ID。
-- `path` 是录制目录下的相对路径，通常就是 `index.m3u8`，也可以是某个 `.ts` 分片路径。
+- 播放入口只需要传 `taskId`。边缘服务会返回 HLS m3u8，并在内部为播放器改写 `.ts` 分片地址。
+
+## 8. 关闭录制文件播放会话
+
+播放页面关闭、切换视频或停止播放时调用。
+
+```http
+POST /api/mobile-record/play/close
+```
+
+### 请求体
+
+```json
+{
+  "taskId": "record_20260605_001"
+}
+```
+
+### 返回示例
+
+```json
+{
+  "code": "SUCCESS",
+  "message": "关闭播放会话成功",
+  "data": {
+    "taskId": "record_20260605_001",
+    "closed": true
+  }
+}
+```
+
+## 9. 删除移动录制本地文件
+
+删除指定任务在边缘服务本机生成的 HLS 源文件目录。接口会先校验任务和目录安全性，校验通过后立即返回，实际文件删除在后台执行。
+
+```http
+POST /api/mobile-record/delete
+Content-Type: application/json
+```
+
+### 请求体
+
+```json
+{
+  "taskId": "record_20260605_001",
+  "operatorUserId": "u_001"
+}
+```
+
+### 字段说明
+
+- `taskId`：格式 string。要删除本地文件的移动录制任务ID，必须与 start 接口传入的 taskId 一致。
+- `operatorUserId`：格式 string。发起删除操作的人ID，可为空字符串；用于日志追踪。
+
+### 业务规则
+
+- 本接口只删除本地录制文件，不删除任务记录。
+- 返回 `SUCCESS` 表示删除请求已受理；后台删除完成后，该任务的 `playUrl`、`m3u8Path`、`segmentCount`、`fileSize`、`durationSeconds`、`codec` 会被清空。
+- 录制中或停止中的任务不允许删除，必须先结束或取消。
+- 如果有用户正在播放该录制文件，删除接口仍会直接受理；播放器后续请求已删除的 `m3u8` 或 `.ts` 分片时会出现加载失败。
+- 为避免误删，只允许删除边缘服务移动录制根目录下的任务目录。
+
+### 返回示例
+
+成功：
+
+```json
+{
+  "code": "SUCCESS",
+  "message": "删除成功"
+}
+```
+
+失败：
+
+```json
+{
+  "code": "FAILED",
+  "message": "删除失败：录制任务不存在"
+}
+```
+
+### message 场景
+
+- `删除成功`：删除请求已受理；本地文件会在后台删除，任务目录本来不存在时也按成功处理。
+- `删除失败：taskId 不能为空`：taskId 为空。
+- `删除失败：录制任务不存在`：taskId 不存在。
+- `删除失败：任务正在录制或停止中，请先结束后再删除`：任务仍在写文件或正在收尾。
+- `删除失败：录制目录不在允许删除范围内：路径`：任务记录中的目录异常，为避免误删已拒绝。
+- `删除失败：系统异常信息`：接口受理前发生其他异常。
 
 ## 服务端需要提供的 callback 接口
 
@@ -427,7 +519,7 @@ http://{edgeHost}:18080/api/mobile-record/play/{taskId}/index.m3u8
   "cameraId": "cam_back_301",
   "status": "finished",
   "stopReason": "manual",
-  "playUrl": "http://edge.example.com/api/mobile-record/play/record_20260605_001/index.m3u8",
+  "playUrl": "http://edge.example.com/api/mobile-record/play/record_20260605_001",
   "outputDir": "D:\\Videos\\Record\\2026-06-05\\record_20260605_001",
   "m3u8Path": "D:\\Videos\\Record\\2026-06-05\\record_20260605_001\\index.m3u8",
   "segmentCount": 360,

@@ -1,9 +1,9 @@
 {
-  "version": "2026.06.12.1834.f1b88ff",
-  "clientVersion": "2026.06.12.1834.f1b88ff",
-  "buildTime": "2026-06-12T18:34:51.019215",
-  "gitCommit": "f1b88ff75282",
-  "gitBranch": "master",
+  "version": "2026.06.17.1658.d4179cb",
+  "clientVersion": "2026.06.17.1658.d4179cb",
+  "buildTime": "2026-06-17T16:58:19.325513",
+  "gitCommit": "d4179cb43f64",
+  "gitBranch": "main",
   "dirty": true,
   "packageMode": "lite",
   "packageName": "EdgeServiceClient",
@@ -20,8 +20,8 @@
   },
   "components": {
     "core": {
-      "version": "2026.06.12.1834.f1b88ff",
-      "hash": "91744781d4b16538"
+      "version": "2026.06.17.1658.d4179cb",
+      "hash": "7d17de0b6e39f44f"
     },
     "sdk": {
       "version": "6.1.9.4",
