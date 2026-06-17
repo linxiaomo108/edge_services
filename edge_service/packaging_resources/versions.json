@@ -1,0 +1,12 @@
+{
+  "ffmpeg": {
+    "version": "6.1",
+    "path": "E:\\Project\\SmartCampus-school\\edge_services\\packaging_resources\\ffmpeg",
+    "updated_at": "2026-03-23T11:24:59.224176"
+  },
+  "whisper_model": {
+    "version": "large-v3",
+    "path": "E:\\Project\\SmartCampus-school\\edge_services\\packaging_resources\\models\\faster-whisper-large-v3",
+    "updated_at": "2026-03-23T11:30:44.560895"
+  }
+}

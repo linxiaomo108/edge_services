@@ -1,0 +1,703 @@
+#!/usr/bin/env python3
+r"""
+语音转写效果验证脚本
+
+用于验证语音转写功能，支持：
+1. 对指定视频执行完整的语音转写流程（与监控页面流程完全一致）
+2. 将转写结果与已有的字幕文件进行对比
+
+流程与监控页面完全一致，包含：
+- 音频提取
+- VAD语音活动检测
+- Whisper ASR转写
+- 幻觉过滤（黑名单匹配、结构化规则、尾段过滤）
+- 重复内容过滤
+- 字幕时间偏移修正
+
+注意：此脚本不会被打包到客户端中，仅用于开发调试。
+
+配置参数（在脚本顶部CONFIG区域设置）：
+- VIDEO_PATH: 要转写的视频文件路径
+- COMPARE_SRT_PATH: 用于对比的已有字幕文件路径（可选）
+- OUTPUT_DIR: 输出目录（可选，默认与视频同目录）
+"""
+
+from __future__ import annotations
+
+import argparse
+import difflib
+import json
+import logging
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+# ============================================================
+# 配置区域 - 在这里设置参数
+# ============================================================
+CONFIG = {
+    # 要转写的视频文件路径（必填）
+    "VIDEO_PATH": r"E:\Videos\2026-03-14\2029442766977818635\teacher_113.mp4",
+    
+    # 用于对比的已有字幕文件路径（可选，留空则不对比）
+    "COMPARE_SRT_PATH": r"E:\Videos\2026-03-14\2029442766977818635\teacher_113.zh.srt",
+    
+    # 输出目录（可选，留空则输出到视频同目录）
+    "OUTPUT_DIR": "",
+    
+    # 保存统计信息的JSON文件路径（可选）
+    "STATS_PATH": "",
+    
+    # Whisper模型大小: small, medium, large-v3
+    "MODEL_SIZE": "large-v3",
+}
+# ============================================================
+
+# 添加项目根目录到路径
+_script_dir = Path(__file__).resolve().parent
+_project_root = _script_dir.parent
+sys.path.insert(0, str(_project_root))
+
+from edge_service.video.ffmpeg import extract_wav, get_audio_start_time, has_audio_stream, probe_duration_seconds
+from edge_service.tasks.speech import (
+    _detect_audio_activity_regions,
+    _estimate_audio_activity_span,
+    _wav_duration,
+    _transcribe_wav,  # 核心转写函数，包含幻觉过滤等所有功能
+    write_srt,
+    write_vtt,
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger("speech_verify")
+
+
+def parse_srt(srt_path: str) -> list[dict]:
+    """解析SRT字幕文件，返回片段列表"""
+    segments = []
+    if not Path(srt_path).exists():
+        return segments
+    
+    content = Path(srt_path).read_text(encoding="utf-8", errors="ignore")
+    blocks = re.split(r"\n\n+", content.strip())
+    
+    time_pattern = re.compile(r"(\d{2}):(\d{2}):(\d{2})[,.](\d{3})")
+    
+    for block in blocks:
+        lines = block.strip().split("\n")
+        if len(lines) < 3:
+            continue
+        
+        time_line = lines[1] if lines[0].isdigit() else lines[0]
+        text_lines = lines[2:] if lines[0].isdigit() else lines[1:]
+        
+        matches = time_pattern.findall(time_line)
+        if len(matches) < 2:
+            continue
+        
+        def to_seconds(m):
+            return int(m[0]) * 3600 + int(m[1]) * 60 + int(m[2]) + int(m[3]) / 1000.0
+        
+        start = to_seconds(matches[0])
+        end = to_seconds(matches[1])
+        text = " ".join(text_lines).strip()
+        
+        if text:
+            segments.append({"start": start, "end": end, "text": text})
+    
+    return segments
+
+
+def compare_subtitles(segs1: list[dict], segs2: list[dict], label1: str = "新转写", label2: str = "原字幕") -> dict:
+    """对比两个字幕的差异"""
+    result = {
+        "summary": {},
+        "text_diff": [],
+        "time_diff": [],
+        "missing_in_new": [],
+        "missing_in_old": [],
+    }
+    
+    # 基本统计
+    result["summary"] = {
+        f"{label1}_segments": len(segs1),
+        f"{label2}_segments": len(segs2),
+        f"{label1}_total_text": sum(len(s.get("text", "")) for s in segs1),
+        f"{label2}_total_text": sum(len(s.get("text", "")) for s in segs2),
+        f"{label1}_duration": max((s.get("end", 0) for s in segs1), default=0) - min((s.get("start", 0) for s in segs1), default=0) if segs1 else 0,
+        f"{label2}_duration": max((s.get("end", 0) for s in segs2), default=0) - min((s.get("start", 0) for s in segs2), default=0) if segs2 else 0,
+    }
+    
+    # 文本对比
+    text1 = "\n".join(s.get("text", "") for s in segs1)
+    text2 = "\n".join(s.get("text", "") for s in segs2)
+    
+    diff = list(difflib.unified_diff(
+        text2.splitlines(),
+        text1.splitlines(),
+        fromfile=label2,
+        tofile=label1,
+        lineterm="",
+    ))
+    result["text_diff"] = diff
+    
+    # 时间覆盖对比
+    def get_time_ranges(segs):
+        return [(s.get("start", 0), s.get("end", 0)) for s in segs]
+    
+    ranges1 = get_time_ranges(segs1)
+    ranges2 = get_time_ranges(segs2)
+    
+    # 找出时间差异较大的片段
+    for i, (s1, e1) in enumerate(ranges1):
+        found = False
+        for s2, e2 in ranges2:
+            if abs(s1 - s2) < 5 and abs(e1 - e2) < 5:
+                found = True
+                break
+        if not found:
+            result["missing_in_old"].append({
+                "index": i,
+                "start": s1,
+                "end": e1,
+                "text": segs1[i].get("text", "")[:50],
+            })
+    
+    for i, (s2, e2) in enumerate(ranges2):
+        found = False
+        for s1, e1 in ranges1:
+            if abs(s1 - s2) < 5 and abs(e1 - e2) < 5:
+                found = True
+                break
+        if not found:
+            result["missing_in_new"].append({
+                "index": i,
+                "start": s2,
+                "end": e2,
+                "text": segs2[i].get("text", "")[:50],
+            })
+    
+    return result
+
+
+def generate_comparison_html(
+    segs1: list[dict],
+    segs2: list[dict],
+    comparison: dict,
+    output_path: str,
+    video_path: str = "",
+    label1: str = "新转写",
+    label2: str = "原字幕",
+) -> None:
+    """生成HTML格式的对比报告"""
+    
+    def fmt_time(sec: float) -> str:
+        h = int(sec // 3600)
+        m = int((sec % 3600) // 60)
+        s = sec % 60
+        return f"{h:02d}:{m:02d}:{s:06.3f}"
+    
+    html_content = f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>语音转写对比报告</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: #f5f5f5; padding: 20px; }}
+        .container {{ max-width: 1400px; margin: 0 auto; }}
+        h1 {{ color: #333; margin-bottom: 20px; text-align: center; }}
+        h2 {{ color: #555; margin: 20px 0 10px; padding-bottom: 5px; border-bottom: 2px solid #ddd; }}
+        h3 {{ color: #666; margin: 15px 0 10px; }}
+        .summary {{ background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        .summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; }}
+        .summary-item {{ background: #f8f9fa; padding: 15px; border-radius: 6px; text-align: center; }}
+        .summary-item .label {{ color: #666; font-size: 14px; }}
+        .summary-item .value {{ color: #333; font-size: 24px; font-weight: bold; margin-top: 5px; }}
+        .comparison {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }}
+        .panel {{ background: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow: hidden; }}
+        .panel-header {{ background: #4a90d9; color: #fff; padding: 12px 15px; font-weight: bold; }}
+        .panel-header.old {{ background: #6c757d; }}
+        .panel-content {{ max-height: 600px; overflow-y: auto; }}
+        .segment {{ padding: 10px 15px; border-bottom: 1px solid #eee; }}
+        .segment:hover {{ background: #f8f9fa; }}
+        .segment .time {{ color: #888; font-size: 12px; font-family: monospace; }}
+        .segment .text {{ margin-top: 5px; line-height: 1.5; }}
+        .missing {{ background: #fff3cd !important; }}
+        .missing-section {{ background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        .missing-item {{ padding: 10px; margin: 5px 0; background: #fff3cd; border-radius: 4px; border-left: 4px solid #ffc107; }}
+        .missing-item .time {{ color: #856404; font-family: monospace; font-size: 13px; }}
+        .missing-item .text {{ color: #333; margin-top: 5px; }}
+        .diff-section {{ background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        .diff-line {{ font-family: monospace; padding: 2px 10px; white-space: pre-wrap; word-break: break-all; }}
+        .diff-add {{ background: #d4edda; color: #155724; }}
+        .diff-del {{ background: #f8d7da; color: #721c24; }}
+        .diff-header {{ color: #6c757d; }}
+        .video-info {{ background: #e7f3ff; padding: 10px 15px; border-radius: 6px; margin-bottom: 20px; color: #004085; }}
+        .tabs {{ display: flex; gap: 5px; margin-bottom: 15px; }}
+        .tab {{ padding: 10px 20px; background: #e9ecef; border: none; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 14px; }}
+        .tab.active {{ background: #fff; font-weight: bold; }}
+        .tab-content {{ display: none; }}
+        .tab-content.active {{ display: block; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 语音转写对比报告</h1>
+        
+        <div class="video-info">
+            <strong>视频文件：</strong>{video_path}
+        </div>
+        
+        <div class="summary">
+            <h2>📊 统计摘要</h2>
+            <div class="summary-grid">
+                <div class="summary-item">
+                    <div class="label">{label1} 片段数</div>
+                    <div class="value">{comparison["summary"].get(f"{label1}_segments", 0)}</div>
+                </div>
+                <div class="summary-item">
+                    <div class="label">{label2} 片段数</div>
+                    <div class="value">{comparison["summary"].get(f"{label2}_segments", 0)}</div>
+                </div>
+                <div class="summary-item">
+                    <div class="label">{label1} 总字数</div>
+                    <div class="value">{comparison["summary"].get(f"{label1}_total_text", 0)}</div>
+                </div>
+                <div class="summary-item">
+                    <div class="label">{label2} 总字数</div>
+                    <div class="value">{comparison["summary"].get(f"{label2}_total_text", 0)}</div>
+                </div>
+                <div class="summary-item">
+                    <div class="label">{label1}新增片段</div>
+                    <div class="value" style="color: #28a745;">{len(comparison.get("missing_in_old", []))}</div>
+                </div>
+                <div class="summary-item">
+                    <div class="label">{label2}缺失片段</div>
+                    <div class="value" style="color: #dc3545;">{len(comparison.get("missing_in_new", []))}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('side-by-side')">📋 并排对比</button>
+            <button class="tab" onclick="showTab('missing-new')">➕ 新增片段 ({len(comparison.get("missing_in_old", []))})</button>
+            <button class="tab" onclick="showTab('missing-old')">➖ 缺失片段 ({len(comparison.get("missing_in_new", []))})</button>
+            <button class="tab" onclick="showTab('text-diff')">📝 文本差异</button>
+        </div>
+        
+        <div id="side-by-side" class="tab-content active">
+            <div class="comparison">
+                <div class="panel">
+                    <div class="panel-header">✨ {label1} ({len(segs1)} 片段)</div>
+                    <div class="panel-content">
+'''
+    
+    # 新转写片段
+    missing_in_old_times = set((item["start"], item["end"]) for item in comparison.get("missing_in_old", []))
+    for seg in segs1:
+        is_missing = (seg.get("start", 0), seg.get("end", 0)) in missing_in_old_times
+        css_class = "segment missing" if is_missing else "segment"
+        html_content += f'''                        <div class="{css_class}">
+                            <div class="time">{fmt_time(seg.get("start", 0))} → {fmt_time(seg.get("end", 0))}</div>
+                            <div class="text">{seg.get("text", "")}</div>
+                        </div>
+'''
+    
+    html_content += '''                    </div>
+                </div>
+                <div class="panel">
+                    <div class="panel-header old">📄 ''' + label2 + f''' ({len(segs2)} 片段)</div>
+                    <div class="panel-content">
+'''
+    
+    # 原字幕片段
+    missing_in_new_times = set((item["start"], item["end"]) for item in comparison.get("missing_in_new", []))
+    for seg in segs2:
+        is_missing = (seg.get("start", 0), seg.get("end", 0)) in missing_in_new_times
+        css_class = "segment missing" if is_missing else "segment"
+        html_content += f'''                        <div class="{css_class}">
+                            <div class="time">{fmt_time(seg.get("start", 0))} → {fmt_time(seg.get("end", 0))}</div>
+                            <div class="text">{seg.get("text", "")}</div>
+                        </div>
+'''
+    
+    html_content += '''                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div id="missing-new" class="tab-content">
+            <div class="missing-section">
+                <h3>➕ ''' + label1 + '''中有但''' + label2 + f'''中没有的片段 ({len(comparison.get("missing_in_old", []))}个)</h3>
+'''
+    
+    for item in comparison.get("missing_in_old", []):
+        html_content += f'''                <div class="missing-item">
+                    <div class="time">[{fmt_time(item["start"])} → {fmt_time(item["end"])}]</div>
+                    <div class="text">{segs1[item["index"]].get("text", "") if item["index"] < len(segs1) else item.get("text", "")}</div>
+                </div>
+'''
+    
+    if not comparison.get("missing_in_old"):
+        html_content += '''                <p style="color: #666; padding: 20px; text-align: center;">无新增片段</p>
+'''
+    
+    html_content += '''            </div>
+        </div>
+        
+        <div id="missing-old" class="tab-content">
+            <div class="missing-section">
+                <h3>➖ ''' + label2 + '''中有但''' + label1 + f'''中没有的片段 ({len(comparison.get("missing_in_new", []))}个)</h3>
+'''
+    
+    for item in comparison.get("missing_in_new", []):
+        html_content += f'''                <div class="missing-item">
+                    <div class="time">[{fmt_time(item["start"])} → {fmt_time(item["end"])}]</div>
+                    <div class="text">{segs2[item["index"]].get("text", "") if item["index"] < len(segs2) else item.get("text", "")}</div>
+                </div>
+'''
+    
+    if not comparison.get("missing_in_new"):
+        html_content += '''                <p style="color: #666; padding: 20px; text-align: center;">无缺失片段</p>
+'''
+    
+    html_content += '''            </div>
+        </div>
+        
+        <div id="text-diff" class="tab-content">
+            <div class="diff-section">
+                <h3>📝 文本差异（Unified Diff格式）</h3>
+                <div style="max-height: 600px; overflow-y: auto; background: #f8f9fa; padding: 10px; border-radius: 4px;">
+'''
+    
+    for line in comparison.get("text_diff", []):
+        if line.startswith("+") and not line.startswith("+++"):
+            html_content += f'                    <div class="diff-line diff-add">{line}</div>\n'
+        elif line.startswith("-") and not line.startswith("---"):
+            html_content += f'                    <div class="diff-line diff-del">{line}</div>\n'
+        elif line.startswith("@@") or line.startswith("---") or line.startswith("+++"):
+            html_content += f'                    <div class="diff-line diff-header">{line}</div>\n'
+        else:
+            html_content += f'                    <div class="diff-line">{line}</div>\n'
+    
+    if not comparison.get("text_diff"):
+        html_content += '''                    <p style="color: #666; padding: 20px; text-align: center;">无文本差异</p>
+'''
+    
+    html_content += '''                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function showTab(tabId) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelector(`[onclick="showTab('${tabId}')"]`).classList.add('active');
+            document.getElementById(tabId).classList.add('active');
+        }
+    </script>
+</body>
+</html>
+'''
+    
+    Path(output_path).write_text(html_content, encoding="utf-8")
+
+
+def transcribe_video(video_path: str, output_dir: str | None = None, model_size: str = "medium") -> tuple[list[dict], str, dict]:
+    """
+    对视频执行完整的语音转写流程（与监控页面流程完全一致）
+    
+    使用 _transcribe_audio 核心函数，包含：
+    - 幻觉过滤（黑名单匹配、结构化规则）
+    - 尾段可疑片段过滤
+    - 重复内容过滤
+    - VAD语音活动检测
+    - 字幕时间偏移修正
+    
+    返回：(segments, srt_path, stats)
+    """
+    video = Path(video_path)
+    if not video.exists():
+        raise FileNotFoundError(f"视频文件不存在: {video_path}")
+    
+    if output_dir:
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        out_dir = video.parent
+    
+    stats = {
+        "video_path": str(video),
+        "video_duration": 0.0,
+        "audio_stream_start": 0.0,
+        "wav_duration": 0.0,
+        "speech_regions": [],
+        "active_audio_sec": 0.0,
+        "active_ratio": 0.0,
+        "audio_offset": 0.0,
+        "content_end_sec": 0.0,
+        "subtitle_offset": 0.0,
+        "asr_segments": 0,
+        "elapsed_sec": 0.0,
+    }
+    
+    start_time = time.monotonic()
+    
+    # 1. 检查音频流
+    log.info("=" * 60)
+    log.info("开始语音转写验证（流程与监控页面完全一致）")
+    log.info("视频文件: %s", video_path)
+    log.info("模型大小: %s", model_size)
+    log.info("=" * 60)
+    
+    if not has_audio_stream(str(video)):
+        raise RuntimeError("视频文件无音频流")
+    
+    # 2. 获取视频信息
+    video_dur = probe_duration_seconds(str(video))
+    audio_stream_start = get_audio_start_time(str(video))
+    stats["video_duration"] = video_dur
+    stats["audio_stream_start"] = audio_stream_start
+    
+    log.info("[1/6] 视频信息: 时长=%.1f秒, 音频流起始=%.3f秒", video_dur, audio_stream_start)
+    
+    # 3. 提取音频
+    wav_path = str(out_dir / f"{video.stem}_verify.wav")
+    log.info("[2/6] 提取音频中...")
+    extract_wav(str(video), wav_path, sample_rate=16000)
+    
+    wav_dur = _wav_duration(wav_path)
+    stats["wav_duration"] = wav_dur
+    log.info("       音频提取完成: %s, 时长=%.1f秒", wav_path, wav_dur)
+    
+    # 4. 检测语音活动区间
+    log.info("[3/6] 检测语音活动区间...")
+    speech_regions = _detect_audio_activity_regions(wav_path)
+    audio_offset, content_end_sec = _estimate_audio_activity_span(wav_path)
+    
+    stats["speech_regions"] = [(float(s), float(e)) for s, e in speech_regions]
+    stats["audio_offset"] = audio_offset
+    stats["content_end_sec"] = content_end_sec
+    
+    if speech_regions:
+        active_audio_sec = sum(max(0.0, float(et) - float(st)) for st, et in speech_regions)
+        active_ratio = (active_audio_sec / max(wav_dur, 1.0)) if wav_dur > 0 else 0.0
+        stats["active_audio_sec"] = active_audio_sec
+        stats["active_ratio"] = active_ratio
+        
+        log.info("       检测到 %d 个语音区间, 活跃=%.1f秒, 总=%.1f秒, 比例=%.1f%%",
+                 len(speech_regions), active_audio_sec, wav_dur, active_ratio * 100.0)
+        
+        # 如果活跃比例过低，放弃VAD区间限制
+        if active_ratio < 0.30 and wav_dur > 300:
+            log.warning("       VAD检测活跃比例过低(%.1f%%)，放弃VAD区间限制改用全段转写", active_ratio * 100.0)
+            speech_regions = []
+    else:
+        log.info("       未检测到明显语音区间，将使用全段转写")
+    
+    log.info("       音频偏移=%.3f秒, 内容结束=%.3f秒", audio_offset, content_end_sec)
+    
+    # 5. 执行ASR转写（使用核心函数，包含幻觉过滤等所有功能）
+    log.info("[4/6] 执行ASR转写（包含幻觉过滤、黑名单匹配等）...")
+    effective_dur = max(wav_dur, video_dur, content_end_sec)
+    
+    # 进度回调
+    _last_progress = [0]
+    def _on_seg_progress(seg_count: int, current_time: float):
+        progress = min(100, int((current_time / max(effective_dur, 1.0)) * 100))
+        if progress > _last_progress[0]:
+            _last_progress[0] = progress
+            print(f"\r       转写进度: {progress}% ({seg_count}片段, 当前={current_time:.1f}s)", end="", flush=True)
+    
+    def _on_stage_progress(stage: str, message: str):
+        log.info("       [%s] %s", stage, message)
+    
+    # 调用核心转写函数（与监控页面完全一致）
+    segs = _transcribe_wav(
+        wav_path,
+        total_dur=effective_dur,
+        expected_end_sec=content_end_sec if content_end_sec > 0 else effective_dur,
+        speech_regions=speech_regions if speech_regions else None,
+        raw={},  # 空的raw字典，使用默认配置
+        on_seg_progress=_on_seg_progress,
+        on_stage_progress=_on_stage_progress,
+        model_size_override=model_size,
+    )
+    
+    print()  # 换行
+    
+    stats["asr_segments"] = len(segs)
+    log.info("[5/6] 转写完成: %d 个片段（已过滤幻觉和重复内容）", len(segs))
+    
+    # 6. 计算字幕偏移并生成字幕文件
+    log.info("[6/6] 生成字幕文件...")
+    
+    subtitle_offset = max(0.0, float(audio_stream_start or 0.0))
+    content_offset = 0.0
+    if segs and audio_offset > 0:
+        first_seg_start = max(0.0, float(segs[0].get("start", 0.0) or 0.0))
+        candidate_offset = max(0.0, audio_offset - first_seg_start)
+        if candidate_offset > 0 and effective_dur > 0:
+            last_seg_end = max(float(s.get("end", 0.0) or 0.0) for s in segs)
+            if last_seg_end + subtitle_offset + candidate_offset <= effective_dur:
+                content_offset = candidate_offset
+    subtitle_offset += max(0.0, content_offset)
+    stats["subtitle_offset"] = subtitle_offset
+    
+    log.info("       字幕时间修正: audio_start=%.3f秒, content_offset=%.3f秒, subtitle_offset=%.3f秒",
+             audio_stream_start, content_offset, subtitle_offset)
+    
+    # 生成字幕文件
+    srt_path = str(out_dir / f"{video.stem}_verify.zh.srt")
+    vtt_path = str(out_dir / f"{video.stem}_verify.zh.vtt")
+    
+    write_srt(segs, srt_path, offset=subtitle_offset)
+    write_vtt(segs, vtt_path, offset=subtitle_offset)
+    
+    log.info("       SRT: %s", srt_path)
+    log.info("       VTT: %s", vtt_path)
+    
+    # 清理临时WAV文件
+    try:
+        Path(wav_path).unlink(missing_ok=True)
+    except Exception:
+        pass
+    
+    elapsed = time.monotonic() - start_time
+    stats["elapsed_sec"] = elapsed
+    
+    log.info("=" * 60)
+    log.info("转写完成! 耗时=%.1f秒, 片段=%d, 字幕偏移=%.3f秒", elapsed, len(segs), subtitle_offset)
+    log.info("=" * 60)
+    
+    # 应用偏移后的片段（用于对比）
+    adjusted_segs = []
+    for seg in segs:
+        adjusted_segs.append({
+            "start": seg["start"] + subtitle_offset,
+            "end": seg["end"] + subtitle_offset,
+            "text": seg["text"],
+        })
+    
+    return adjusted_segs, srt_path, stats
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="语音转写效果验证脚本（流程与监控页面完全一致）",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=r"""
+使用方式1 - 直接修改脚本顶部CONFIG区域的参数，然后运行:
+    python scripts/speech_verify.py
+    
+使用方式2 - 通过命令行参数（会覆盖CONFIG中的设置）:
+    python scripts/speech_verify.py --video "E:\Videos\xxx\teacher_121.mp4"
+    python scripts/speech_verify.py --video "E:\Videos\xxx\teacher_121.mp4" --compare "E:\Videos\xxx\teacher_121.zh.srt"
+        """,
+    )
+    parser.add_argument("--video", "-v", help="要转写的视频文件路径（覆盖CONFIG.VIDEO_PATH）")
+    parser.add_argument("--compare", "-c", help="用于对比的已有字幕文件路径（覆盖CONFIG.COMPARE_SRT_PATH）")
+    parser.add_argument("--output", "-o", help="输出目录（覆盖CONFIG.OUTPUT_DIR）")
+    parser.add_argument("--stats", "-s", help="保存统计信息的JSON文件路径（覆盖CONFIG.STATS_PATH）")
+    parser.add_argument("--model", "-m", help="Whisper模型大小: small, medium, large-v3（覆盖CONFIG.MODEL_SIZE）")
+    
+    args = parser.parse_args()
+    
+    # 合并CONFIG和命令行参数（命令行优先）
+    video_path = args.video or CONFIG.get("VIDEO_PATH", "")
+    compare_path = args.compare or CONFIG.get("COMPARE_SRT_PATH", "")
+    output_dir = args.output or CONFIG.get("OUTPUT_DIR", "")
+    stats_path = args.stats or CONFIG.get("STATS_PATH", "")
+    model_size = args.model or CONFIG.get("MODEL_SIZE", "medium")
+    
+    if not video_path:
+        log.error("错误: 未指定视频文件路径。请在CONFIG.VIDEO_PATH中设置或通过--video参数指定。")
+        return 1
+    
+    try:
+        # 执行转写
+        segs, srt_path, stats = transcribe_video(video_path, output_dir or None, model_size)
+        
+        # 保存统计信息
+        if stats_path:
+            stats_file = Path(stats_path)
+            stats_file.parent.mkdir(parents=True, exist_ok=True)
+            stats_file.write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
+            log.info("统计信息已保存: %s", stats_path)
+        
+        # 对比字幕
+        if compare_path:
+            log.info("")
+            log.info("=" * 60)
+            log.info("开始字幕对比")
+            log.info("=" * 60)
+            
+            old_segs = parse_srt(compare_path)
+            if not old_segs:
+                log.warning("原字幕文件为空或解析失败: %s", compare_path)
+            else:
+                comparison = compare_subtitles(segs, old_segs, "新转写", "原字幕")
+                
+                log.info("")
+                log.info("【统计对比】")
+                for k, v in comparison["summary"].items():
+                    log.info("  %s: %s", k, v)
+                
+                log.info("")
+                log.info("【新转写中有但原字幕中没有的片段】(%d个)", len(comparison["missing_in_old"]))
+                for item in comparison["missing_in_old"][:10]:
+                    log.info("  [%.1f-%.1f] %s...", item["start"], item["end"], item["text"])
+                if len(comparison["missing_in_old"]) > 10:
+                    log.info("  ... 还有 %d 个", len(comparison["missing_in_old"]) - 10)
+                
+                log.info("")
+                log.info("【原字幕中有但新转写中没有的片段】(%d个)", len(comparison["missing_in_new"]))
+                for item in comparison["missing_in_new"][:10]:
+                    log.info("  [%.1f-%.1f] %s...", item["start"], item["end"], item["text"])
+                if len(comparison["missing_in_new"]) > 10:
+                    log.info("  ... 还有 %d 个", len(comparison["missing_in_new"]) - 10)
+                
+                if comparison["text_diff"]:
+                    log.info("")
+                    log.info("【文本差异】(前50行)")
+                    for line in comparison["text_diff"][:50]:
+                        log.info("  %s", line)
+                
+                # 生成HTML对比报告
+                html_report_path = Path(srt_path).with_suffix(".compare.html")
+                generate_comparison_html(
+                    segs, old_segs, comparison,
+                    str(html_report_path),
+                    video_path=video_path,
+                )
+                log.info("")
+                log.info("HTML对比报告已生成: %s", html_report_path)
+                
+                # 同时保存JSON（便于程序处理）
+                json_report_path = Path(srt_path).with_suffix(".compare.json")
+                json_report_path.write_text(
+                    json.dumps(comparison, ensure_ascii=False, indent=2, default=str),
+                    encoding="utf-8",
+                )
+                log.info("JSON对比数据已保存: %s", json_report_path)
+        
+        log.info("")
+        log.info("验证完成!")
+        return 0
+        
+    except Exception as e:
+        log.error("转写失败: %s", e, exc_info=True)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

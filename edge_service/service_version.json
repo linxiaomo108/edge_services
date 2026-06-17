@@ -1,0 +1,47 @@
+{
+  "version": "2026.06.12.1834.f1b88ff",
+  "clientVersion": "2026.06.12.1834.f1b88ff",
+  "buildTime": "2026-06-12T18:34:51.019215",
+  "gitCommit": "f1b88ff75282",
+  "gitBranch": "master",
+  "dirty": true,
+  "packageMode": "lite",
+  "packageName": "EdgeServiceClient",
+  "package": {
+    "mode": "lite",
+    "name": "EdgeServiceClient",
+    "capabilities": {
+      "download": true,
+      "transcode": true,
+      "speech": false,
+      "subtitle": false,
+      "analysis": true
+    }
+  },
+  "components": {
+    "core": {
+      "version": "2026.06.12.1834.f1b88ff",
+      "hash": "91744781d4b16538"
+    },
+    "sdk": {
+      "version": "6.1.9.4",
+      "hash": "e342bad1fb136f71"
+    },
+    "ffmpeg": {
+      "version": "6.1",
+      "hash": "6a2a00e129e5c7f4"
+    },
+    "models": {
+      "version": "disabled",
+      "hash": ""
+    },
+    "docs": {
+      "version": "1.0.0",
+      "hash": "967d0a5a18a53f64"
+    },
+    "ui": {
+      "version": "1.0.0",
+      "hash": "b12fd38b25f053c6"
+    }
+  }
+}

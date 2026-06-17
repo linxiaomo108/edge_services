@@ -1,0 +1,7 @@
+faster-whisper>=1.0.3
+opencc-python-reimplemented>=0.1.7
+zhconv>=1.4.3
+jieba>=0.42.1
+opencv-python>=4.10.0.84
+numpy>=2.0.0
+webrtcvad>=2.0.10

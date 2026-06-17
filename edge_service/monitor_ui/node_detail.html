@@ -1,0 +1,2675 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>边缘服务监控 - 课次节点详情</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  </head>
+  <body class="bg-[#F8FAFC] font-sans overflow-y-auto">
+    <div class="flex flex-col min-h-screen">
+      <div class="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between sticky top-0 z-10 h-[120px]">
+        <button id="openConnect" class="flex items-center gap-4 text-left">
+          <div class="w-10 h-10 rounded-lg flex items-center justify-center border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 transition-colors">
+            <i data-lucide="settings" class="w-5 h-5"></i>
+          </div>
+          <div>
+            <div class="flex items-center gap-3">
+              <div class="text-xl font-bold leading-tight" id="nodeName">未连接服务器（点击连接）</div>
+              <span class="px-2 py-0.5 bg-slate-100 border border-slate-200 text-slate-500 text-[12px] rounded font-mono" id="nodeVersion">v0.0.0</span>
+            </div>
+            <p class="text-[12px] text-slate-500 mt-1 font-mono" id="nodeMeta">服务 ID: - • 服务器地址: </p>
+          </div>
+        </button>
+
+        <div class="flex items-center gap-3">
+          <div id="serviceStatus" class="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium bg-slate-100 border-slate-200 text-slate-500">
+            <div id="serviceDot" class="w-2 h-2 rounded-full bg-slate-400 animate-pulse"></div>
+            <span id="serviceStatusText">未启动</span>
+          </div>
+          <button id="refreshBtn" class="flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-4 py-2 rounded-lg text-[13px] font-medium transition-colors">
+            <i data-lucide="refresh-ccw" class="w-4 h-4"></i>
+            同步状态
+          </button>
+        </div>
+      </div>
+
+      <div class="px-[20px] pb-[20px] w-full space-y-[20px]">
+        <div id="openedDirPanel" class="hidden bg-white rounded-xl border border-slate-200 px-6 py-4">
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex items-center gap-2 text-sm text-slate-700">
+              <i data-lucide="folder-open" class="w-4 h-4 text-blue-600"></i>
+              <span class="text-slate-500">已打开目录：</span>
+              <span id="openedDirPanelText" class="font-mono text-slate-800 break-all">-</span>
+            </div>
+            <button id="openedDirPanelClose" class="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-colors" title="关闭">
+              <i data-lucide="x" class="w-4 h-4"></i>
+            </button>
+          </div>
+          <div id="openedDirPanelList" class="mt-3 max-h-[260px] overflow-auto rounded-lg border border-slate-100 bg-slate-50 p-3 text-[12px] text-slate-600 font-mono">
+            -
+          </div>
+        </div>
+        <div class="grid grid-cols-12 gap-[20px] mt-[25px]">
+          <div class="col-span-4 bg-white rounded-xl border border-slate-200 p-6">
+            <div class="flex items-center justify-between gap-2 mb-6 text-slate-800 font-semibold">
+              <div class="flex items-center gap-2 min-w-0">
+              <i data-lucide="server" class="w-5 h-5 text-violet-600"></i>
+                <span id="campusName" class="truncate">本地校区</span>
+              </div>
+              <div class="relative group flex items-center justify-center">
+                <div id="heartbeatBadge" class="w-2 h-2 rounded-full animate-pulse bg-slate-400"></div>
+                <div id="heartbeatTooltip" class="hidden group-hover:block absolute right-0 top-5 z-20 min-w-[220px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] text-slate-600 shadow-lg">
+                  <div class="font-medium text-slate-700" id="heartbeatTooltipTitle">心跳未启动</div>
+                  <div class="mt-1 font-mono" id="heartbeatTooltipTime">最近心跳：-</div>
+                  <div class="mt-1 break-all text-rose-500 hidden" id="heartbeatTooltipError"></div>
+                </div>
+              </div>
+            </div>
+            <div class="space-y-4">
+              <div class="flex items-center justify-between text-sm py-1 border-b border-slate-50">
+                <span class="text-slate-500">内网 IP</span>
+                <span class="font-mono font-medium text-slate-700" id="nodeIp">-</span>
+              </div>
+              <div class="flex items-center justify-between text-sm py-1 border-b border-slate-50">
+                <span class="text-slate-500">持续运行</span>
+                <span class="font-mono font-medium text-slate-700" id="uptime">-</span>
+              </div>
+              <div class="flex items-center justify-between text-sm py-1 border-b border-slate-50">
+                <span class="text-slate-500">最近拉取</span>
+                <span class="font-mono font-medium text-slate-700" id="lastPollAt">-</span>
+              </div>
+              <div class="flex items-center justify-between text-sm py-1">
+                <span class="text-slate-500">最近上报</span>
+                <span class="font-mono font-medium text-slate-700" id="lastReportAt">-</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-span-8 bg-white rounded-xl border border-slate-200 p-6">
+            <div class="flex items-center gap-2 mb-8 text-slate-800 font-semibold">
+              <i data-lucide="activity" class="w-5 h-5 text-violet-600"></i>
+              硬件资源实时占用率
+            </div>
+            <div class="grid grid-cols-2 gap-x-12 gap-y-8">
+              <div class="space-y-2">
+                <div class="flex justify-between text-sm">
+                  <span class="flex items-center gap-2 text-slate-500"><i data-lucide="cpu" class="w-4 h-4"></i> CPU 使用率</span>
+                  <span class="font-medium text-slate-700" id="cpuText">-</span>
+                </div>
+                <div class="h-2 bg-slate-100 rounded-full overflow-hidden"><div id="cpuBar" class="h-2 bg-blue-500 rounded-full" style="width:0%"></div></div>
+              </div>
+              <div class="space-y-2">
+                <div class="flex justify-between text-sm">
+                  <span class="flex items-center gap-2 text-slate-500"><i data-lucide="activity" class="w-4 h-4"></i> GPU 使用率</span>
+                  <span class="font-medium text-slate-700" id="gpuText">-</span>
+                </div>
+                <div class="h-2 bg-slate-100 rounded-full overflow-hidden"><div id="gpuBar" class="h-2 bg-amber-500 rounded-full" style="width:0%"></div></div>
+              </div>
+              <div class="space-y-2">
+                <div class="flex justify-between text-sm">
+                  <span class="flex items-center gap-2 text-slate-500"><i data-lucide="activity" class="w-4 h-4"></i> RAM 使用率</span>
+                  <span class="font-medium text-rose-500" id="ramText">-</span>
+                </div>
+                <div class="h-2 bg-slate-100 rounded-full overflow-hidden"><div id="ramBar" class="h-2 bg-rose-500 rounded-full" style="width:0%"></div></div>
+              </div>
+              <div class="space-y-2">
+                <div class="flex justify-between text-sm">
+                  <span class="flex items-center gap-2 text-slate-500"><i data-lucide="hard-drive" class="w-4 h-4"></i> 磁盘使用率</span>
+                  <span class="font-medium text-slate-700" id="diskText">-</span>
+                </div>
+                <div class="h-2 bg-slate-100 rounded-full overflow-hidden"><div id="diskBar" class="h-2 bg-violet-500 rounded-full" style="width:0%"></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-4 gap-[20px]">
+          <div id="statusRunningCard" class="bg-white p-5 rounded-xl border border-slate-200 flex items-center gap-4 cursor-pointer transition-all hover:border-violet-300">
+            <div class="w-12 h-12 rounded-full bg-violet-50 flex items-center justify-center text-violet-600">
+              <i data-lucide="play" class="w-6 h-6"></i>
+            </div>
+            <div>
+              <div class="text-slate-500 text-xs mb-1">进行中的任务</div>
+              <div class="text-2xl font-bold text-slate-800" id="runningCount">0</div>
+            </div>
+          </div>
+          <div id="statusPendingCard" class="bg-white p-5 rounded-xl border border-slate-200 flex items-center gap-4 cursor-pointer transition-all hover:border-blue-300">
+            <div class="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
+              <i data-lucide="clock" class="w-6 h-6"></i>
+            </div>
+            <div>
+              <div class="text-slate-500 text-xs mb-1">待处理队列</div>
+              <div class="text-2xl font-bold text-slate-800" id="queueCount">0</div>
+            </div>
+          </div>
+          <div id="statusCompletedCard" class="bg-white p-5 rounded-xl border border-slate-200 flex items-center gap-4 cursor-pointer transition-all hover:border-emerald-300">
+            <div class="w-12 h-12 rounded-full bg-emerald-50 flex items-center justify-center text-emerald-600">
+              <i data-lucide="check-circle" class="w-6 h-6"></i>
+            </div>
+            <div>
+              <div class="text-slate-500 text-xs mb-1">今日累计完成</div>
+              <div class="text-2xl font-bold text-slate-800" id="completedCount">0</div>
+            </div>
+          </div>
+          <div id="statusErrorCard" class="bg-white p-5 rounded-xl border border-slate-200 flex items-center gap-4 cursor-pointer transition-all hover:border-rose-300">
+            <div class="w-12 h-12 rounded-full bg-rose-50 flex items-center justify-center text-rose-600">
+              <i data-lucide="alert-circle" class="w-6 h-6"></i>
+            </div>
+            <div>
+              <div class="text-slate-500 text-xs mb-1">今日异常终止</div>
+              <div class="text-2xl font-bold text-slate-800" id="failedCount">0</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-xl border border-slate-200 flex flex-col min-h-[400px]">
+          <div class="px-6 py-3 border-b border-slate-100 flex items-center justify-between">
+            <div id="taskStatusTabs" class="flex items-center gap-8 text-sm">
+              <button data-status="pending" class="pb-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700 transition-colors">
+                等待中 (<span id="pendingTabCount">0</span>)
+              </button>
+              <button data-status="running" class="pb-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700 transition-colors">
+                进行中 (<span id="runningTabCount">0</span>)
+              </button>
+              <button data-status="completed" class="pb-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700 transition-colors">
+                已完成
+              </button>
+            </div>
+            <div class="flex items-center gap-4">
+              <div class="flex items-center gap-2.5">
+                <select id="taskRoomFilterSelect" class="h-8 w-32 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-600 focus:outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-300">
+                  <option value="">全部教室</option>
+                </select>
+                <input id="taskSearchInput" type="text" placeholder="任务ID / 班级名称" class="h-8 w-44 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-600 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-300" />
+                <button id="taskSearchBtn" class="h-8 px-3 rounded-lg bg-violet-600 text-white text-xs font-medium hover:bg-violet-700 transition-colors">搜索</button>
+              </div>
+              <button id="refreshTasksBtn" class="p-1 text-slate-400 hover:text-violet-600 hover:bg-violet-50 rounded transition-colors" title="刷新任务列表">
+                <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+              </button>
+              <div class="text-xs text-slate-400">当前列表: <span id="taskListCount">0</span> 项</div>
+              <button id="taskSettingsBtn" class="p-1.5 bg-white border border-slate-200 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-50 transition-colors" title="任务设置">
+                <i data-lucide="settings" class="w-4 h-4"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="px-6 py-3 border-b border-slate-100 flex items-center justify-between">
+            <div id="taskTypeFilters" class="flex items-center gap-2 bg-slate-50 p-1 rounded-lg">
+              <button data-filter-type="全部" class="px-4 py-1.5 text-sm rounded-md transition-all bg-white text-violet-600 shadow-sm font-medium">全部</button>
+              <button data-filter-type="下载" class="px-4 py-1.5 text-sm rounded-md transition-all text-slate-500 hover:text-slate-700 hover:bg-slate-200/50">下载</button>
+              <button data-filter-type="转码" class="px-4 py-1.5 text-sm rounded-md transition-all text-slate-500 hover:text-slate-700 hover:bg-slate-200/50">转码</button>
+              <button data-filter-type="语音转写" class="px-4 py-1.5 text-sm rounded-md transition-all text-slate-500 hover:text-slate-700 hover:bg-slate-200/50">语音转写</button>
+              <button data-filter-type="字幕挂载" class="px-4 py-1.5 text-sm rounded-md transition-all text-slate-500 hover:text-slate-700 hover:bg-slate-200/50">字幕挂载</button>
+              <button data-filter-type="视频分析" class="px-4 py-1.5 text-sm rounded-md transition-all text-slate-500 hover:text-slate-700 hover:bg-slate-200/50">视频分析</button>
+            </div>
+            <div id="completedRangeFilters" class="hidden items-center gap-2 text-xs text-slate-500">
+              <span>完成时间</span>
+              <select id="completedRangeSelect" class="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-600 focus:outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-300">
+                <option value="7d">最近7天</option>
+                <option value="30d">最近30天</option>
+                <option value="60d">最近60天</option>
+                <option value="custom">自定义时间</option>
+              </select>
+              <div id="completedCustomRange" class="hidden items-center gap-2">
+                <input id="completedStartDateInput" type="date" class="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-600 focus:outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-300" />
+                <span>至</span>
+                <input id="completedEndDateInput" type="date" class="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-600 focus:outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-300" />
+              </div>
+            </div>
+          </div>
+
+          <div class="grid px-6 py-3 text-xs font-medium text-slate-400 border-b border-slate-100" style="grid-template-columns: minmax(0,1fr) 600px 150px 400px 205px 185px;">
+            <div>任务 ID / 类型</div>
+            <div>关联班级与课次</div>
+            <div>状态详情</div>
+            <div>进度</div>
+            <div class="text-right" id="timeColHeader">开始时间</div>
+            <div class="text-right">操作</div>
+          </div>
+
+          <div id="taskRows" class="divide-y divide-slate-50"></div>
+          <div id="taskLoadingHint" class="px-6 py-12 text-center text-slate-400 text-sm hidden">
+            <div class="inline-flex items-center gap-2">
+              <i data-lucide="loader-circle" class="w-4 h-4 animate-spin"></i>
+              <span>正在加载任务数据...</span>
+            </div>
+          </div>
+          <div id="emptyHint" class="px-6 py-12 text-center text-slate-400 text-sm hidden">暂无相关任务数据</div>
+          <div class="px-6 py-3 border-t border-slate-100 flex items-center justify-between">
+            <div id="taskPageInfo" class="text-xs text-slate-400">第 1 / 1 页</div>
+            <div class="flex items-center gap-2">
+              <button id="taskPagePrevBtn" class="px-3 py-1.5 text-xs rounded border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">上一页</button>
+              <button id="taskPageNextBtn" class="px-3 py-1.5 text-xs rounded border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">下一页</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="connectOverlay" class="fixed inset-0 z-[2000] hidden">
+      <div class="absolute inset-0 bg-black/40"></div>
+      <div class="absolute inset-0 flex items-center justify-center p-4">
+        <div class="w-[560px] max-w-[95vw] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
+          <div class="h-[48px] px-4 flex items-center justify-between bg-slate-50 border-b border-slate-100">
+            <div class="flex items-center gap-2 text-slate-700 font-medium">
+              <i data-lucide="heart-pulse" class="w-4 h-4 text-emerald-500"></i>
+              <span>连接服务器</span>
+            </div>
+            <button id="connectClose" class="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-white transition-colors">
+              <i data-lucide="x" class="w-4 h-4"></i>
+            </button>
+          </div>
+
+          <div class="p-5">
+            <div class="grid grid-cols-12 gap-x-4 gap-y-4">
+              <div class="col-span-3 flex items-center justify-end text-slate-600 text-sm">连接名</div>
+              <div class="col-span-9">
+                <input id="connNameInput" class="w-full h-10 px-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-400 text-sm" placeholder="边缘服务的名称，例如：铜陵路服务" />
+              </div>
+
+              <div class="col-span-3 flex items-center justify-end text-slate-600 text-sm">服务器地址</div>
+              <div class="col-span-9">
+                <input id="serverAddrInput" class="w-full h-10 px-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-400 text-sm" placeholder="" />
+              </div>
+
+              <div class="col-span-3 flex items-center justify-end text-slate-600 text-sm">校区code</div>
+              <div class="col-span-9">
+                <input id="campusCodeInput" class="w-full h-10 px-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-400 text-sm" placeholder="" />
+              </div>
+
+              <div class="col-span-3 flex items-center justify-end text-slate-600 text-sm">服务器ID</div>
+              <div class="col-span-9">
+                <input id="serverIdInput" class="w-full h-10 px-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-400 text-sm font-mono" placeholder="" />
+              </div>
+
+              <div class="col-span-3 flex items-center justify-end text-slate-600 text-sm">任务起始日期</div>
+              <div class="col-span-9">
+                <input id="startDateInput" type="date" class="w-full h-10 px-3 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-400 text-sm" placeholder="" />
+              </div>
+            </div>
+          </div>
+
+          <div class="px-5 pb-5 flex items-center justify-between">
+            <button id="testConnBtn" class="h-10 px-4 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors text-sm">测试连接</button>
+            <div class="flex items-center gap-3">
+              <button id="connectOkBtn" class="h-10 px-10 rounded-lg border border-blue-500 bg-white text-blue-600 hover:bg-blue-50 transition-colors text-sm">确定</button>
+              <button id="connectCancelBtn" class="h-10 px-10 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors text-sm">取消</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="concurrencyOverlay" class="fixed inset-0 z-[2000] hidden">
+      <div class="absolute inset-0 bg-black/40"></div>
+      <div class="absolute inset-0 flex items-center justify-center p-4">
+        <div class="w-[720px] max-w-[95vw] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
+          <div class="h-[56px] px-6 flex items-center justify-between bg-white border-b border-slate-100">
+            <div class="text-slate-800 font-semibold" id="concurrencyTitle">服务并发配置</div>
+            <button id="concurrencyClose" class="w-9 h-9 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-colors">
+              <i data-lucide="x" class="w-4 h-4"></i>
+            </button>
+          </div>
+
+          <div class="px-6 py-5">
+            <div class="flex items-center gap-4 mb-5">
+              <div class="text-slate-700 w-[72px]">下载路径</div>
+              <div class="flex-1 flex items-center gap-2">
+                <div class="flex-1 relative">
+                  <input id="downloadPathInput" class="w-full h-10 pl-3 pr-10 rounded-lg border border-slate-200 bg-white text-slate-700 font-mono outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-400 text-sm" value="D:\\Videos" />
+                  <button id="pickDownloadDirBtn" type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                    <i data-lucide="folder" class="w-4 h-4"></i>
+                  </button>
+                </div>
+                <button id="openDownloadDirBtn" class="h-10 px-4 rounded-lg border border-slate-200 bg-white text-blue-600 hover:bg-blue-50 transition-colors text-sm font-medium">打开目录</button>
+              </div>
+            </div>
+
+            <div class="text-sm text-slate-500 mb-5">设置该节点下每种任务类型的最大并发执行数量</div>
+
+            <div class="space-y-4">
+              <div class="flex items-center justify-between">
+                <div class="text-slate-700">下载任务上限</div>
+                <div class="flex items-center border border-slate-200 rounded-xl overflow-hidden bg-white">
+                  <button type="button" data-concurrency-key="download" data-concurrency-step="-1" class="w-12 h-10 flex items-center justify-center text-slate-500 hover:bg-slate-50">-</button>
+                  <div class="w-12 h-10 flex items-center justify-center text-slate-700 font-medium border-x border-slate-200" id="concurrencyDownloadVal">3</div>
+                  <button type="button" data-concurrency-key="download" data-concurrency-step="1" class="w-12 h-10 flex items-center justify-center text-slate-500 hover:bg-slate-50">+</button>
+                </div>
+              </div>
+
+              <div class="flex items-center justify-between">
+                <div class="text-slate-700">转码任务上限</div>
+                <div class="flex items-center border border-slate-200 rounded-xl overflow-hidden bg-white">
+                  <button type="button" data-concurrency-key="transcode" data-concurrency-step="-1" class="w-12 h-10 flex items-center justify-center text-slate-500 hover:bg-slate-50">-</button>
+                  <div class="w-12 h-10 flex items-center justify-center text-slate-700 font-medium border-x border-slate-200" id="concurrencyTranscodeVal">3</div>
+                  <button type="button" data-concurrency-key="transcode" data-concurrency-step="1" class="w-12 h-10 flex items-center justify-center text-slate-500 hover:bg-slate-50">+</button>
+                </div>
+              </div>
+
+              <div id="speechConcurrencyRow" class="flex items-center justify-between">
+                <div class="text-slate-700">语音转写任务上限</div>
+                <div class="flex items-center gap-3">
+                  <select id="speechModelSelect" class="h-10 px-3 rounded-lg border border-slate-200 bg-white text-slate-700 outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-400 text-sm">
+                    <option value="small">small</option>
+                    <option value="medium">medium</option>
+                    <option value="large">large</option>
+                  </select>
+                  <div class="flex items-center border border-slate-200 rounded-xl overflow-hidden bg-white">
+                    <button type="button" data-concurrency-key="asr" data-concurrency-step="-1" class="w-12 h-10 flex items-center justify-center text-slate-500 hover:bg-slate-50">-</button>
+                    <div class="w-12 h-10 flex items-center justify-center text-slate-700 font-medium border-x border-slate-200" id="concurrencyAsrVal">3</div>
+                    <button type="button" data-concurrency-key="asr" data-concurrency-step="1" class="w-12 h-10 flex items-center justify-center text-slate-500 hover:bg-slate-50">+</button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="subtitleConcurrencyRow" class="flex items-center justify-between">
+                <div class="text-slate-700">字幕挂载任务上限</div>
+                <div class="flex items-center border border-slate-200 rounded-xl overflow-hidden bg-white">
+                  <button type="button" data-concurrency-key="subtitle" data-concurrency-step="-1" class="w-12 h-10 flex items-center justify-center text-slate-500 hover:bg-slate-50">-</button>
+                  <div class="w-12 h-10 flex items-center justify-center text-slate-700 font-medium border-x border-slate-200" id="concurrencySubtitleVal">3</div>
+                  <button type="button" data-concurrency-key="subtitle" data-concurrency-step="1" class="w-12 h-10 flex items-center justify-center text-slate-500 hover:bg-slate-50">+</button>
+                </div>
+              </div>
+
+              <div class="flex items-center justify-between">
+                <div class="text-slate-700">视频分析任务上限</div>
+                <div class="flex items-center border border-slate-200 rounded-xl overflow-hidden bg-white">
+                  <button type="button" data-concurrency-key="analysis" data-concurrency-step="-1" class="w-12 h-10 flex items-center justify-center text-slate-500 hover:bg-slate-50">-</button>
+                  <div class="w-12 h-10 flex items-center justify-center text-slate-700 font-medium border-x border-slate-200" id="concurrencyAnalysisVal">3</div>
+                  <button type="button" data-concurrency-key="analysis" data-concurrency-step="1" class="w-12 h-10 flex items-center justify-center text-slate-500 hover:bg-slate-50">+</button>
+                </div>
+              </div>
+
+              <div class="flex items-center justify-between pt-2 border-t border-slate-100">
+                <div>
+                  <div class="text-slate-700">执行模式</div>
+                  <div class="text-xs text-slate-400 mt-0.5">手动：点击执行按钮才运行；自动：按并发上限自动调度</div>
+                </div>
+                <div class="flex items-center bg-slate-100 p-0.5 rounded-lg">
+                  <button type="button" id="modeManualBtn" class="px-4 py-1.5 text-sm rounded-md transition-all bg-white text-violet-600 shadow-sm font-medium">手动</button>
+                  <button type="button" id="modeAutoBtn" class="px-4 py-1.5 text-sm rounded-md transition-all text-slate-500 hover:text-slate-700 hover:bg-slate-200/50">自动</button>
+                </div>
+              </div>
+
+              <div class="pt-2 border-t border-slate-100 space-y-3">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <div class="text-slate-700">实时流代理</div>
+                    <div class="text-xs text-slate-400 mt-0.5">open 接口会同时返回 publicPlayUrl 和 lanPlayUrl；内网环境只需启用开关，公网映射环境优先填写完整公网基础地址</div>
+                  </div>
+                  <label class="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                    <input id="enableStreamProxyInput" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500" />
+                    <span>启用</span>
+                  </label>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                  <div class="col-span-2">
+                    <div class="text-xs text-slate-500 mb-1">公网基础地址（推荐）</div>
+                    <input id="publicBaseUrlInput" class="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-slate-700 outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-400 text-sm" placeholder="例如：https://1.2.3.4:19080" />
+                  </div>
+                  <div>
+                    <div class="text-xs text-slate-500 mb-1">公网主机/IP（备用）</div>
+                    <input id="publicHostInput" class="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-slate-700 outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-400 text-sm" placeholder="例如：1.2.3.4" />
+                  </div>
+                  <div>
+                    <div class="text-xs text-slate-500 mb-1">公网端口（备用）</div>
+                    <input id="publicPortInput" class="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-slate-700 outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-400 text-sm" placeholder="例如：19080" />
+                  </div>
+                  <div>
+                    <div class="text-xs text-slate-500 mb-1">公网协议（备用）</div>
+                    <select id="publicSchemeSelect" class="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-slate-700 outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-400 text-sm">
+                      <option value="">自动/留空</option>
+                      <option value="http">http</option>
+                      <option value="https">https</option>
+                    </select>
+                  </div>
+                  <div class="col-span-2 text-xs text-slate-400">建议优先只配置 `enableStreamProxy + publicBaseUrl`；纯内网环境仅启用开关即可。</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="px-6 py-4 border-t border-slate-100 flex items-center justify-between bg-white">
+            <button id="resetDbBtn" class="h-10 px-5 rounded-lg border border-rose-200 bg-white text-rose-600 hover:bg-rose-50 transition-colors text-sm flex items-center gap-2">
+              <i data-lucide="trash-2" class="w-4 h-4"></i>
+              清空数据库并重拉
+            </button>
+            <div class="flex items-center gap-3">
+              <button id="concurrencyCancel" class="h-10 px-10 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors text-sm">取消</button>
+              <button id="concurrencySave" class="h-10 px-10 rounded-lg bg-violet-600 text-white hover:bg-violet-700 transition-colors text-sm font-medium">保存设置</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="downloadInfoOverlay" class="fixed inset-0 z-[2000] hidden">
+      <div class="absolute inset-0 bg-black/40"></div>
+      <div class="absolute inset-0 flex items-center justify-center p-4">
+        <div class="w-[520px] max-w-[95vw] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
+          <div class="h-[48px] px-4 flex items-center justify-between bg-slate-50 border-b border-slate-100">
+            <div class="flex items-center gap-2 text-slate-700 font-medium">
+              <i data-lucide="download" class="w-4 h-4 text-blue-600"></i>
+              <span id="downloadInfoTitle">-下载参数</span>
+            </div>
+            <button id="downloadInfoClose" class="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-white transition-colors">
+              <i data-lucide="x" class="w-4 h-4"></i>
+            </button>
+          </div>
+
+          <div class="p-5">
+            <div class="bg-white border border-slate-200 rounded-xl p-4">
+              <div class="grid grid-cols-12 gap-x-4 gap-y-3 text-sm">
+                <div class="col-span-3 text-slate-500 flex items-center justify-end">NVR ID</div>
+                <div class="col-span-9">
+                  <div class="h-10 px-3 rounded-lg border border-slate-200 bg-slate-50 flex items-center text-slate-800 font-mono" id="downloadInfoNvrId">-</div>
+                </div>
+
+                <div class="col-span-3 text-slate-500 flex items-center justify-end">NVR地址</div>
+                <div class="col-span-9">
+                  <div class="h-10 px-3 rounded-lg border border-slate-200 bg-slate-50 flex items-center text-slate-800 font-mono" id="downloadInfoNvrAddr">-</div>
+                </div>
+
+                <div class="col-span-3 text-slate-500 flex items-center justify-end">NVR通道</div>
+                <div class="col-span-9">
+                  <div class="h-10 px-3 rounded-lg border border-slate-200 bg-slate-50 flex items-center text-slate-800 font-mono" id="downloadInfoNvrChannel">-</div>
+                </div>
+
+                <div class="col-span-3 text-slate-500 flex items-center justify-end">下载时段</div>
+                <div class="col-span-9">
+                  <div class="h-10 px-3 rounded-lg border border-slate-200 bg-slate-50 flex items-center text-slate-800 font-mono" id="downloadInfoRange">-</div>
+                </div>
+
+                <div class="col-span-3 text-slate-500 flex items-center justify-end">关联任务</div>
+                <div class="col-span-9">
+                  <div class="min-h-10 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 flex items-center text-slate-800 font-mono break-all" id="downloadInfoOtherTasks">-</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="px-5 pb-5 flex justify-center">
+            <button id="downloadInfoOk" class="h-10 px-12 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors text-sm">关闭弹窗</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="taskProgressOverlay" class="fixed inset-0 z-[2000] hidden">
+      <div class="absolute inset-0 bg-black/40"></div>
+      <div class="absolute inset-0 flex items-center justify-center p-4">
+        <div class="w-[760px] max-w-[95vw] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
+          <div class="h-[52px] px-5 flex items-center justify-between bg-slate-50 border-b border-slate-100">
+            <div class="text-slate-800 font-semibold" id="taskProgressTitle">- 任务进度</div>
+            <button id="taskProgressClose" class="w-9 h-9 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-white transition-colors">
+              <i data-lucide="x" class="w-4 h-4"></i>
+            </button>
+          </div>
+
+          <div class="p-5">
+            <div class="grid grid-cols-12 text-sm text-slate-500 border border-slate-200 rounded-lg overflow-hidden">
+              <div class="col-span-3 px-4 py-3 bg-slate-50 border-r border-slate-200 font-medium text-slate-600">步骤</div>
+              <div class="col-span-3 px-4 py-3 bg-slate-50 border-r border-slate-200 font-medium text-slate-600">状态</div>
+              <div class="col-span-3 px-4 py-3 bg-slate-50 border-r border-slate-200 font-medium text-slate-600">开始时间</div>
+              <div class="col-span-3 px-4 py-3 bg-slate-50 font-medium text-slate-600">完成时间</div>
+              <div class="col-span-12 divide-y divide-slate-100" id="taskProgressRows"></div>
+            </div>
+          </div>
+
+          <div class="px-5 pb-5 flex justify-center">
+            <button id="taskProgressOk" class="h-10 px-12 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors text-sm">关闭弹窗</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="stopConfirmOverlay" class="fixed inset-0 z-[2000] hidden">
+      <div class="absolute inset-0 bg-black/40"></div>
+      <div class="absolute inset-0 flex items-center justify-center p-4">
+        <div class="w-[420px] max-w-[95vw] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
+          <div class="h-[48px] px-4 flex items-center justify-between bg-slate-50 border-b border-slate-100">
+            <div class="flex items-center gap-2 text-slate-700 font-medium">
+              <i data-lucide="triangle-alert" class="w-4 h-4 text-amber-500"></i>
+              <span>确认终止任务</span>
+            </div>
+            <button id="stopConfirmClose" class="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-white transition-colors">
+              <i data-lucide="x" class="w-4 h-4"></i>
+            </button>
+          </div>
+          <div class="px-5 py-5 text-sm text-slate-600 leading-6">
+            终止后，当前任务会重置为等待中；若已产生临时文件，将一并清除。是否确认终止？
+          </div>
+          <div class="px-5 pb-5 flex items-center justify-end gap-3">
+            <button id="stopConfirmCancel" class="h-10 px-6 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors text-sm">取消</button>
+            <button id="stopConfirmOk" class="h-10 px-6 rounded-lg bg-rose-600 text-white hover:bg-rose-700 transition-colors text-sm">确认终止</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="rerunConfirmOverlay" class="fixed inset-0 z-[2000] hidden">
+      <div class="absolute inset-0 bg-black/40"></div>
+      <div class="absolute inset-0 flex items-center justify-center p-4">
+        <div class="w-[420px] max-w-[95vw] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
+          <div class="h-[48px] px-4 flex items-center justify-between bg-slate-50 border-b border-slate-100">
+            <div class="flex items-center gap-2 text-slate-700 font-medium">
+              <i data-lucide="rotate-cw" class="w-4 h-4 text-violet-500"></i>
+              <span>确认重新执行</span>
+            </div>
+            <button id="rerunConfirmClose" class="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-white transition-colors">
+              <i data-lucide="x" class="w-4 h-4"></i>
+            </button>
+          </div>
+          <div class="px-5 py-5 text-sm text-slate-600 leading-6">
+            确认重新执行？系统会清空当前任务及其后续依赖步骤的已完成产物，重置任务状态，并按现有流程继续执行后续任务。
+          </div>
+          <div class="px-5 pb-5 flex items-center justify-end gap-3">
+            <button id="rerunConfirmCancel" class="h-10 px-6 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors text-sm">取消</button>
+            <button id="rerunConfirmOk" class="h-10 px-6 rounded-lg bg-violet-600 text-white hover:bg-violet-700 transition-colors text-sm">确认重新执行</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="reprocessConfirmOverlay" class="fixed inset-0 z-[2000] hidden">
+      <div class="absolute inset-0 bg-black/40"></div>
+      <div class="absolute inset-0 flex items-center justify-center p-4">
+        <div class="w-[420px] max-w-[95vw] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
+          <div class="h-[48px] px-4 flex items-center justify-between bg-slate-50 border-b border-slate-100">
+            <div class="flex items-center gap-2 text-slate-700 font-medium">
+              <i data-lucide="refresh-cw" class="w-4 h-4 text-blue-500"></i>
+              <span>确认重新处理</span>
+            </div>
+            <button id="reprocessConfirmClose" class="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-white transition-colors">
+              <i data-lucide="x" class="w-4 h-4"></i>
+            </button>
+          </div>
+          <div class="px-5 py-5 text-sm text-slate-600 leading-6">
+            确认重新处理？系统会保留原始分段，只清理处理、合并和源视频产物，并从下载步骤的处理阶段重新开始。
+          </div>
+          <div class="px-5 pb-5 flex items-center justify-end gap-3">
+            <button id="reprocessConfirmCancel" class="h-10 px-6 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors text-sm">取消</button>
+            <button id="reprocessConfirmOk" class="h-10 px-6 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors text-sm">确认重新处理</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="toastOverlay" class="fixed right-4 top-4 z-[2100] hidden">
+      <div class="w-[360px] max-w-[90vw] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
+        <div class="h-[44px] px-4 flex items-center justify-between bg-slate-50 border-b border-slate-100">
+          <div class="flex items-center gap-2 text-slate-600 text-sm">
+            <i id="toastTitleIcon" data-lucide="info" class="w-4 h-4 text-slate-500"></i>
+            <span id="toastTitle">提示</span>
+          </div>
+          <button id="toastClose" class="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-white transition-colors" title="关闭">
+            <i data-lucide="x" class="w-4 h-4"></i>
+          </button>
+        </div>
+        <div class="p-4 flex items-center gap-3">
+          <div id="toastIconWrap" class="w-8 h-8 rounded-full flex items-center justify-center bg-emerald-50 text-emerald-600">
+            <i id="toastIcon" data-lucide="check" class="w-5 h-5"></i>
+          </div>
+          <div class="text-slate-700 text-sm font-medium" id="toastText">连接成功！</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="videoPlayerOverlay" class="fixed inset-0 z-[2200] hidden">
+      <div class="absolute inset-0 bg-black/60" id="videoPlayerBg"></div>
+      <div class="absolute inset-0 flex items-center justify-center p-4">
+        <div class="w-[800px] max-w-[95vw] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
+          <div class="h-[44px] px-4 flex items-center justify-between bg-slate-50 border-b border-slate-100">
+            <div class="flex items-center gap-3">
+              <span class="text-sm font-medium text-slate-700" id="videoPlayerTitle">视频播放</span>
+              <div class="flex items-center gap-1 bg-slate-100 p-0.5 rounded-md" id="videoSourceTabs">
+                <button data-vsource="source" class="px-3 py-1 text-xs rounded font-medium transition-all bg-white text-violet-600 shadow-sm">源视频</button>
+                <button data-vsource="hls" class="px-3 py-1 text-xs rounded font-medium transition-all text-slate-500 hover:text-slate-700">1080P</button>
+              </div>
+            </div>
+            <button id="videoPlayerClose" class="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-white transition-colors" title="关闭">
+              <i data-lucide="x" class="w-4 h-4"></i>
+            </button>
+          </div>
+          <div class="bg-black relative" style="aspect-ratio:16/9;">
+            <video id="videoPlayerEl" class="w-full h-full" controls autoplay></video>
+            <div id="videoSubtitleHint" class="absolute top-3 left-3 px-3 py-1.5 rounded-lg bg-black/65 text-white text-xs hidden"></div>
+            <div id="videoNoTranscode" class="absolute inset-0 flex flex-col items-center justify-center bg-black hidden">
+              <p class="text-white text-base mb-4">当前视频还未转码</p>
+              <button id="startTranscodeBtn" class="px-5 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg transition-colors">立即转码</button>
+            </div>
+            <div id="videoTranscoding" class="absolute inset-0 flex flex-col items-center justify-center bg-black hidden">
+              <p class="text-white text-base mb-4">当前视频正在转码中</p>
+              <button id="gotoTranscodeBtn" class="px-5 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg transition-colors">查看转码进度</button>
+            </div>
+          </div>
+
+    <template id="taskRowTpl">
+      <div class="grid px-6 py-4 items-center hover:bg-slate-50/50 transition-colors group" data-role="row" style="grid-template-columns: minmax(0,1fr) 600px 150px 400px 205px 185px;">
+        <div class="flex items-start gap-3 min-w-0">
+          <div class="w-9 h-9 rounded-lg flex items-center justify-center border bg-slate-50 border-slate-200 text-slate-600" data-role="iconBox">
+            <i data-lucide="file-text" class="w-5 h-5" data-role="icon"></i>
+          </div>
+          <div class="min-w-0">
+            <div class="text-sm font-medium text-slate-800" data-role="name">-</div>
+            <button type="button" class="text-xs text-slate-400 font-mono mt-0.5" data-role="idBtn">-</button>
+          </div>
+        </div>
+        <div class="min-w-0 pr-6">
+          <div class="text-sm text-slate-700 flex flex-nowrap items-center gap-2 whitespace-nowrap" data-role="classInfo">-</div>
+          <div class="text-xs text-slate-500 mt-0.5" data-role="lessonInfo">-</div>
+        </div>
+        <div class="text-sm font-medium pr-6" data-role="status">-</div>
+        <div class="pr-8">
+          <div class="flex items-center gap-3">
+            <div class="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+              <div class="h-full rounded-full bg-violet-500" style="width:0%" data-role="bar"></div>
+            </div>
+            <span class="text-xs font-medium text-slate-600 w-10" data-role="pct">0%</span>
+          </div>
+          <div class="mt-1 text-[12px] text-slate-500 font-mono hidden" data-role="downloadDetail">-</div>
+        </div>
+        <div class="text-right text-xs text-slate-400 font-mono" data-role="startTime">-</div>
+        <div class="flex justify-end gap-2">
+          <button data-action="open-folder" title="打开下载目录" class="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors hidden" data-role="openFolderBtn">
+            <i data-lucide="folder-open" class="w-3.5 h-3.5"></i>
+          </button>
+          <button data-action="open-transcode-folder" title="打开转码目录" class="p-1.5 text-slate-400 hover:text-violet-600 hover:bg-violet-50 rounded transition-colors hidden" data-role="openTranscodeFolderBtn">
+            <i data-lucide="folder-search" class="w-3.5 h-3.5"></i>
+          </button>
+          <button data-action="play-video" title="播放视频" class="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded transition-colors hidden" data-role="playBtn">
+            <i data-lucide="play-circle" class="w-3.5 h-3.5"></i>
+          </button>
+          <button data-action="pause" title="暂停任务" class="p-1.5 text-slate-400 hover:text-amber-500 hover:bg-amber-50 rounded transition-colors hidden" data-role="pauseBtn">
+            <i data-lucide="pause" class="w-3.5 h-3.5"></i>
+          </button>
+          <button data-action="start" title="开始执行" class="p-1.5 text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 rounded transition-colors hidden" data-role="startBtn">
+            <i data-lucide="play" class="w-3.5 h-3.5"></i>
+          </button>
+          <button data-action="resume" title="继续任务" class="p-1.5 text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 rounded transition-colors hidden" data-role="resumeBtn">
+            <i data-lucide="play" class="w-3.5 h-3.5"></i>
+          </button>
+          <button data-action="stop" title="终止任务" class="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded transition-colors hidden" data-role="stopBtn">
+            <i data-lucide="x-circle" class="w-3.5 h-3.5"></i>
+          </button>
+          <button data-action="retry" title="重新执行" class="p-1.5 text-slate-400 hover:text-violet-500 hover:bg-violet-50 rounded transition-colors hidden" data-role="retryBtn">
+            <i data-lucide="rotate-cw" class="w-3.5 h-3.5"></i>
+          </button>
+          <button data-action="reprocess" title="重新处理" class="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded transition-colors hidden" data-role="reprocessBtn">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+          </button>
+          <button data-action="cancel" title="取消等待" class="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded transition-colors hidden" data-role="cancelBtn">
+            <i data-lucide="square" class="w-3.5 h-3.5"></i>
+          </button>
+          <button data-action="view-speech-report" title="查看转写文件" class="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors hidden" data-role="speechReportBtn">
+            <i data-lucide="file-text" class="w-3.5 h-3.5"></i>
+          </button>
+          <button data-action="view-analysis-report" title="查看分析报告" class="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded transition-colors hidden" data-role="analysisReportBtn">
+            <i data-lucide="bar-chart-3" class="w-3.5 h-3.5"></i>
+          </button>
+          <button data-action="rerun" title="重新执行" class="p-1.5 text-slate-400 hover:text-violet-500 hover:bg-violet-50 rounded transition-colors hidden" data-role="rerunBtn">
+            <i data-lucide="rotate-cw" class="w-3.5 h-3.5"></i>
+          </button>
+        </div>
+      </div>
+    </template>
+
+    <script>
+      lucide.createIcons();
+
+      const el = (id) => document.getElementById(id);
+
+      const startedAtLocalMs = Date.now();
+      const fmt = (iso) => {
+        if (!iso || iso === '-') return '-';
+        try {
+          const d = new Date(iso);
+          if (isNaN(d.getTime())) return '-';
+          // 转为北京时间 UTC+8
+          const bjTime = new Date(d.getTime() + (8 * 60 * 60 * 1000));
+          const Y = bjTime.getUTCFullYear();
+          const M = String(bjTime.getUTCMonth() + 1).padStart(2, '0');
+          const D = String(bjTime.getUTCDate()).padStart(2, '0');
+          const h = String(bjTime.getUTCHours()).padStart(2, '0');
+          const m = String(bjTime.getUTCMinutes()).padStart(2, '0');
+          const s = String(bjTime.getUTCSeconds()).padStart(2, '0');
+          return `${Y}-${M}-${D} ${h}:${m}:${s}`;
+        } catch (e) {
+          return '-';
+        }
+      };
+      let currentMeta = { serviceId: '-', version: '1.0.0', connectionName: '', serverAddress: '', campusCode: '', schoolAreaName: '', serverId: '', startDate: '', heartbeatStatus: 'idle', lastHeartbeatAt: '' };
+      let filterType = '全部';
+      let statusFilter = 'running';
+      let taskIndex = new Map();
+      let autoPickedStatus = false;
+      let concurrencyCfg = { download: 2, transcode: 2, asr: 2, subtitle: 2, analysis: 2 };
+      let downloadPath = 'D:\\Videos';
+      let speechModel = 'medium';
+      let executionMode = 'manual';
+      let packageMode = 'all';
+      let packageCapabilities = { download: true, transcode: true, speech: true, subtitle: true, analysis: true };
+      let enableStreamProxy = false;
+      let publicBaseUrl = '';
+      let publicHost = '';
+      let publicPort = '';
+      let publicScheme = '';
+      let latestTasks = [];
+      let latestState = null;
+      let latestHeartbeat = null;
+      let tasksInFlight = null;
+      let taskRowNodes = new Map();
+      let currentTasksPage = 1;
+      let currentTasksPageSize = 20;
+      let currentTasksTotal = 0;
+      let currentTasksTotalPages = 1;
+      let latestTaskStatusCounts = { pending: 0, running: 0, completed: 0, error: 0, all: 0 };
+      let tasksRefreshState = 'idle';
+      let tasksRefreshError = '';
+      let pendingStopTaskId = '';
+      let pendingRerunTaskId = '';
+      let pendingReprocessTaskId = '';
+      let taskRefreshBurstTimers = [];
+      let taskSearchKeyword = '';
+      let taskRoomFilter = '';
+      let taskRoomOptions = [];
+      let taskSearchInFlight = false;
+      let taskSearchCooldownUntil = 0;
+      let completedRange = '7d';
+      let completedStartDate = '';
+      let completedEndDate = '';
+      let lastCompletedAutoRefreshAt = 0;
+      const COMPLETED_TASK_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+
+      const renderTaskRefreshState = () => {
+        const countEl = el('taskListCount');
+        const baseCount = Number(currentTasksTotal || 0);
+        if (!countEl) return;
+        if (tasksRefreshState === 'loading') {
+          countEl.textContent = `${baseCount} 项（刷新中）`;
+          return;
+        }
+        if (tasksRefreshState === 'error') {
+          countEl.textContent = `${baseCount} 项（刷新延迟）`;
+          return;
+        }
+        countEl.textContent = String(baseCount);
+      };
+
+      const renderTaskListState = (taskCount) => {
+        const loadingHint = el('taskLoadingHint');
+        const emptyHint = el('emptyHint');
+        if (!loadingHint || !emptyHint) return;
+        const hasTasks = Number(taskCount || 0) > 0;
+        const isLoading = tasksRefreshState === 'loading';
+        loadingHint.classList.toggle('hidden', !isLoading || hasTasks);
+        emptyHint.classList.toggle('hidden', hasTasks || isLoading);
+      };
+
+      const renderTaskPagination = () => {
+        const totalPages = Math.max(1, Number(currentTasksTotalPages || 1));
+        const page = Math.min(totalPages, Math.max(1, Number(currentTasksPage || 1)));
+        el('taskPageInfo').textContent = `第 ${page} / ${totalPages} 页，共 ${Number(currentTasksTotal || 0)} 项`;
+        el('taskPagePrevBtn').disabled = page <= 1;
+        el('taskPageNextBtn').disabled = page >= totalPages;
+        el('taskPagePrevBtn').classList.toggle('opacity-50', page <= 1);
+        el('taskPageNextBtn').classList.toggle('opacity-50', page >= totalPages);
+      };
+
+      const renderTaskSearchControls = () => {
+        const roomSelect = el('taskRoomFilterSelect');
+        if (roomSelect) {
+          const current = String(taskRoomFilter || '');
+          const rooms = Array.isArray(taskRoomOptions) ? taskRoomOptions : [];
+          roomSelect.innerHTML = '';
+          const allOpt = document.createElement('option');
+          allOpt.value = '';
+          allOpt.textContent = '全部教室';
+          roomSelect.appendChild(allOpt);
+          rooms.forEach(room => {
+            const text = String(room || '').trim();
+            if (!text) return;
+            const opt = document.createElement('option');
+            opt.value = text;
+            opt.textContent = text.endsWith('教室') ? text : `${text}教室`;
+            roomSelect.appendChild(opt);
+          });
+          if (current && !rooms.includes(current)) {
+            taskRoomFilter = '';
+          }
+          roomSelect.value = taskRoomFilter;
+        }
+        const searchInput = el('taskSearchInput');
+        if (searchInput && document.activeElement !== searchInput) searchInput.value = taskSearchKeyword;
+        const searchBtn = el('taskSearchBtn');
+        if (searchBtn) {
+          const disabled = taskSearchInFlight || Date.now() < taskSearchCooldownUntil;
+          searchBtn.disabled = disabled;
+          searchBtn.textContent = taskSearchInFlight ? '搜索中' : '搜索';
+          searchBtn.classList.toggle('opacity-50', disabled);
+          searchBtn.classList.toggle('cursor-not-allowed', disabled);
+        }
+      };
+
+      const renderCompletedRangeControls = () => {
+        const wrap = el('completedRangeFilters');
+        if (wrap) {
+          wrap.classList.toggle('hidden', statusFilter !== 'completed');
+          wrap.classList.toggle('flex', statusFilter === 'completed');
+        }
+        const rangeSelect = el('completedRangeSelect');
+        if (rangeSelect) rangeSelect.value = completedRange;
+        const customWrap = el('completedCustomRange');
+        if (customWrap) {
+          customWrap.classList.toggle('hidden', completedRange !== 'custom');
+          customWrap.classList.toggle('flex', completedRange === 'custom');
+        }
+        const startInput = el('completedStartDateInput');
+        if (startInput && document.activeElement !== startInput) startInput.value = completedStartDate;
+        const endInput = el('completedEndDateInput');
+        if (endInput && document.activeElement !== endInput) endInput.value = completedEndDate;
+      };
+
+      const sortTasks = (tasks) => {
+        const stageOrder = { download: 0, transcode: 1, asr: 2, subtitle: 3, analysis: 4 };
+        const shotOrder = { 1: 0, 2: 1, 3: 2 };
+        const statusOrder = { running: 0, paused: 1, error: 2, pending: 3, completed: 4 };
+        const _numId = (t) => {
+          const s = String(t.id || '').split('-')[0];
+          const n = parseInt(s, 10);
+          return isNaN(n) ? 999999 : n;
+        };
+        const _dateKey = (value) => {
+          const s = String(value || '').trim();
+          return s || '9999-12-31';
+        };
+        return tasks.slice().sort((a, b) => {
+          if (String(a.statusType || '') === 'pending' && String(b.statusType || '') === 'pending') {
+            const lessonDateA = _dateKey(a.lessonDate);
+            const lessonDateB = _dateKey(b.lessonDate);
+            if (lessonDateA !== lessonDateB) return lessonDateA < lessonDateB ? -1 : 1;
+            const startA = _dateKey(a.lessonStartAt);
+            const startB = _dateKey(b.lessonStartAt);
+            if (startA !== startB) return startA < startB ? -1 : 1;
+            const endA = _dateKey(a.lessonEndAt);
+            const endB = _dateKey(b.lessonEndAt);
+            if (endA !== endB) return endA < endB ? -1 : 1;
+            const idA = _numId(a);
+            const idB = _numId(b);
+            if (idA !== idB) return idA - idB;
+          }
+          const na = _numId(a);
+          const nb = _numId(b);
+          if (na !== nb) return na - nb;
+          const sa = shotOrder[Number(a.taskType)] ?? 99;
+          const sb = shotOrder[Number(b.taskType)] ?? 99;
+          if (sa !== sb) return sa - sb;
+          const xa = statusOrder[String(a.statusType || '')] ?? 99;
+          const xb = statusOrder[String(b.statusType || '')] ?? 99;
+          if (xa !== xb) return xa - xb;
+          const ta = stageOrder[String(a.type || '')] ?? 99;
+          const tb = stageOrder[String(b.type || '')] ?? 99;
+          if (ta !== tb) return ta - tb;
+          const ida = String(a.id || '');
+          const idb = String(b.id || '');
+          if (ida === idb) return 0;
+          return ida < idb ? -1 : 1;
+        });
+      };
+
+      const showOverlay = (id) => el(id).classList.remove('hidden');
+      const hideOverlay = (id) => el(id).classList.add('hidden');
+
+      const normalizeAddress = (addr) => {
+        const a = String(addr || '').trim();
+        if (!a) return '';
+        if (a.startsWith('http://') || a.startsWith('https://')) return a;
+        return 'http://' + a;
+      };
+
+      const renderHeader = () => {
+        const connected = !!String(currentMeta.serverAddress || '').trim();
+        const nodeName = el('nodeName');
+        const nodeVersion = el('nodeVersion');
+        const serverAddress = connected ? String(currentMeta.serverAddress || '') : '';
+        nodeVersion.textContent = String(currentMeta.version || 'v0.0.0');
+
+        if (!connected) {
+          nodeName.textContent = '未连接服务器（点击连接）';
+          nodeName.className = 'text-xl font-bold leading-tight text-[#F23249]';
+        } else {
+          nodeName.textContent = String(currentMeta.connectionName || '').trim() || '边缘服务';
+          nodeName.className = 'text-xl font-bold leading-tight text-slate-900';
+        }
+
+        el('nodeMeta').textContent = '服务 ID: ' + String(currentMeta.serviceId || '-') + ' • 服务器地址: ' + serverAddress;
+        el('campusName').textContent = String(currentMeta.schoolAreaName || '').trim() || String(currentMeta.campusCode || '').trim() || '本地校区';
+      };
+
+      const fetchMeta = async () => {
+        try {
+          const res = await fetch('/api/meta', { cache: 'no-store' });
+          if (!res.ok) return;
+          currentMeta = await res.json();
+          renderHeader();
+        } catch (e) {}
+      };
+
+      const fetchLocalIp = async () => {
+        try {
+          const res = await fetch('/api/local-ip', { cache: 'no-store' });
+          if (!res.ok) return;
+          const j = await res.json();
+          if (j && j.ok && j.ip) {
+            el('nodeIp').textContent = String(j.ip);
+          }
+        } catch (e) {}
+      };
+
+      let toastTimer = null;
+      const showToast = (ok, msg) => {
+        el('toastTitle').textContent = '提示';
+        el('toastTitleIcon').setAttribute('data-lucide', ok ? 'check-circle-2' : 'alert-circle');
+        el('toastTitleIcon').className = 'w-4 h-4 ' + (ok ? 'text-emerald-600' : 'text-rose-600');
+        el('toastText').textContent = msg;
+        const wrap = el('toastIconWrap');
+        wrap.className = 'w-8 h-8 rounded-full flex items-center justify-center';
+        if (ok) {
+          wrap.classList.add('bg-emerald-50', 'text-emerald-600');
+          el('toastIcon').setAttribute('data-lucide', 'check');
+        } else {
+          wrap.classList.add('bg-rose-50', 'text-rose-600');
+          el('toastIcon').setAttribute('data-lucide', 'x');
+        }
+        showOverlay('toastOverlay');
+        lucide.createIcons();
+        try { if (toastTimer) clearTimeout(toastTimer); } catch (e) {}
+        toastTimer = setTimeout(() => { hideOverlay('toastOverlay'); }, ok ? 1400 : 2400);
+      };
+
+      const openConnectModal = () => {
+        const hasAny =
+          !!String(currentMeta.connectionName || '').trim() ||
+          !!String(currentMeta.serverAddress || '').trim() ||
+          !!String(currentMeta.campusCode || '').trim() ||
+          !!String(currentMeta.serverId || '').trim();
+        el('connNameInput').value = hasAny ? String(currentMeta.connectionName || '') : '铜陵路 - 数据服务01';
+        el('serverAddrInput').value = hasAny ? String(currentMeta.serverAddress || '') : '192.168.9.83:8080';
+        el('campusCodeInput').value = hasAny ? String(currentMeta.campusCode || '') : 'sh001';
+        el('serverIdInput').value = String(currentMeta.serverId || '1000000001');
+        el('startDateInput').value = String(currentMeta.startDate || '');
+        showOverlay('connectOverlay');
+        lucide.createIcons();
+      };
+
+      const closeConnectModal = () => hideOverlay('connectOverlay');
+      const closeConcurrencyModal = () => hideOverlay('concurrencyOverlay');
+      const closeDownloadInfoModal = () => hideOverlay('downloadInfoOverlay');
+      const closeStopConfirmModal = () => {
+        pendingStopTaskId = '';
+        hideOverlay('stopConfirmOverlay');
+      };
+      const openStopConfirmModal = (taskId) => {
+        pendingStopTaskId = String(taskId || '');
+        showOverlay('stopConfirmOverlay');
+        lucide.createIcons();
+      };
+      const closeRerunConfirmModal = () => {
+        pendingRerunTaskId = '';
+        hideOverlay('rerunConfirmOverlay');
+      };
+      const openRerunConfirmModal = (taskId) => {
+        pendingRerunTaskId = String(taskId || '');
+        showOverlay('rerunConfirmOverlay');
+        lucide.createIcons();
+      };
+      const closeReprocessConfirmModal = () => {
+        pendingReprocessTaskId = '';
+        hideOverlay('reprocessConfirmOverlay');
+      };
+      const openReprocessConfirmModal = (taskId) => {
+        pendingReprocessTaskId = String(taskId || '');
+        showOverlay('reprocessConfirmOverlay');
+        lucide.createIcons();
+      };
+
+      const pad2 = (n) => String(n).padStart(2, '0');
+      const fmtDateTimeSec = (s) => {
+        const v = String(s || '').trim();
+        if (!v) return '-';
+        if (/^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}$/.test(v)) return v;
+        const d = new Date(v);
+        if (Number.isNaN(d.getTime())) return v;
+        return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+      };
+
+      const fmtDateTimeMinute = (s) => {
+        const v = String(s || '').trim();
+        if (!v) return '';
+        const d = new Date(v);
+        if (Number.isNaN(d.getTime())) {
+          const m = v.replace('T', ' ').replace('Z', '');
+          return m.length >= 16 ? m.slice(0, 16) : m;
+        }
+        return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+      };
+
+      const fmtRange = (startAt, endAt) => {
+        const s = String(startAt || '').trim();
+        const e = String(endAt || '').trim();
+        if (!s || !e) return '-';
+        const sFmt = fmtDateTimeMinute(s);
+        const eFmt = fmtDateTimeMinute(e);
+        if (sFmt.slice(0, 10) === eFmt.slice(0, 10)) return sFmt + ' ~ ' + eFmt.slice(11);
+        return sFmt + ' ~ ' + eFmt;
+      };
+
+      const applyPackageCapabilityVisibility = () => {
+        const speechRow = el('speechConcurrencyRow');
+        if (speechRow) speechRow.classList.toggle('hidden', !packageCapabilities.speech);
+        const subtitleRow = el('subtitleConcurrencyRow');
+        if (subtitleRow) subtitleRow.classList.toggle('hidden', !packageCapabilities.subtitle);
+      };
+
+      const renderConcurrencyValues = () => {
+        el('concurrencyDownloadVal').textContent = String(concurrencyCfg.download);
+        el('concurrencyTranscodeVal').textContent = String(concurrencyCfg.transcode);
+        el('concurrencyAsrVal').textContent = String(concurrencyCfg.asr);
+        el('concurrencySubtitleVal').textContent = String(concurrencyCfg.subtitle);
+        el('concurrencyAnalysisVal').textContent = String(concurrencyCfg.analysis);
+        const inp = el('downloadPathInput');
+        if (inp) inp.value = String(downloadPath || 'D:\\Videos');
+        const modelSel = el('speechModelSelect');
+        if (modelSel) modelSel.value = String(speechModel || 'medium');
+        const isAuto = executionMode === 'auto';
+        const manualBtn = el('modeManualBtn');
+        const autoBtn = el('modeAutoBtn');
+        if (manualBtn && autoBtn) {
+          const activeClass = 'bg-white text-violet-600 shadow-sm font-medium';
+          const inactiveClass = 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50';
+          manualBtn.className = 'px-4 py-1.5 text-sm rounded-md transition-all ' + (isAuto ? inactiveClass : activeClass);
+          autoBtn.className = 'px-4 py-1.5 text-sm rounded-md transition-all ' + (isAuto ? activeClass : inactiveClass);
+        }
+        const enableProxyInput = el('enableStreamProxyInput');
+        if (enableProxyInput) enableProxyInput.checked = !!enableStreamProxy;
+        const publicBaseUrlInput = el('publicBaseUrlInput');
+        if (publicBaseUrlInput) publicBaseUrlInput.value = String(publicBaseUrl || '');
+        const publicHostInput = el('publicHostInput');
+        if (publicHostInput) publicHostInput.value = String(publicHost || '');
+        const publicPortInput = el('publicPortInput');
+        if (publicPortInput) publicPortInput.value = String(publicPort || '');
+        const publicSchemeSelect = el('publicSchemeSelect');
+        if (publicSchemeSelect) publicSchemeSelect.value = String(publicScheme || '');
+        applyPackageCapabilityVisibility();
+      };
+
+      const openConcurrencyModal = () => {
+        const titleName = String(el('nodeName').textContent || '').trim() || '边缘服务';
+        el('concurrencyTitle').textContent = '任务设置 - ' + titleName;
+        showOverlay('concurrencyOverlay');
+        renderConcurrencyValues();
+        lucide.createIcons();
+        fetch('/api/concurrency', { cache: 'no-store' })
+          .then(res => res.json().then(j => ({ res, j })).catch(() => ({ res, j: {} })))
+          .then(({ res, j }) => {
+            if (res.ok && j && j.ok && j.concurrency) {
+              concurrencyCfg = { ...concurrencyCfg, ...j.concurrency };
+              downloadPath = String(j.downloadPath || 'D:\\Videos');
+              speechModel = String(j.speechModel || 'medium');
+              executionMode = String(j.executionMode || 'manual');
+              packageMode = String(j.packageMode || 'all');
+              packageCapabilities = { ...packageCapabilities, ...(j.packageCapabilities || {}) };
+              enableStreamProxy = !!j.enableStreamProxy;
+              publicBaseUrl = String(j.publicBaseUrl || '');
+              publicHost = String(j.publicHost || '');
+              publicPort = String(j.publicPort || '');
+              publicScheme = String(j.publicScheme || '');
+              renderConcurrencyValues();
+            }
+          })
+          .catch(() => {});
+      };
+
+      const openDownloadInfoModal = (meta) => {
+        const m = meta || {};
+        const serverTaskId = String(m.serverTaskId || '-');
+        el('downloadInfoTitle').textContent = `${serverTaskId}-下载参数`;
+        el('downloadInfoNvrId').textContent = String(m.nvrId || '-');
+        el('downloadInfoNvrAddr').textContent = String(m.nvrAddress || '-');
+        el('downloadInfoNvrChannel').textContent = String(m.nvrChannel || '-');
+        el('downloadInfoRange').textContent = fmtRange(m.lessonStartAt, m.lessonEndAt);
+        el('downloadInfoOtherTasks').textContent = String(m.otherTasksId || '-');
+        showOverlay('downloadInfoOverlay');
+        lucide.createIcons();
+      };
+
+      const closeTaskProgressModal = () => hideOverlay('taskProgressOverlay');
+
+      const openDirPanel = async (p) => {
+        const path = String(p || '').trim() || '-';
+        el('openedDirPanelText').textContent = path;
+        el('openedDirPanelList').textContent = '加载中...';
+        el('openedDirPanel').classList.remove('hidden');
+        lucide.createIcons();
+        try {
+          const res = await fetch('/api/list-folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) });
+          const j = await res.json().catch(() => ({}));
+          if (res.ok && j && j.ok && Array.isArray(j.items)) {
+            const rows = j.items.map(it => {
+              const name = String(it.name || '');
+              const size = it.isDir ? '<DIR>' : String(it.size || 0);
+              return size.padStart(10, ' ') + '  ' + name;
+            });
+            el('openedDirPanelList').textContent = rows.length ? rows.join('\n') : '(空目录)';
+          } else {
+            el('openedDirPanelList').textContent = '(无法读取目录内容)';
+          }
+        } catch (e) {
+          el('openedDirPanelList').textContent = '(无法读取目录内容)';
+        }
+      };
+
+      const openTaskFolder = async (taskId) => {
+        const id = String(taskId || '').trim();
+        if (!id) {
+          showToast(false, '任务标识无效');
+          return;
+        }
+        try {
+          const res = await fetch('/api/task/open-folder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id })
+          });
+          const j = await res.json().catch(() => ({}));
+          const ok = !!j.ok && res.ok;
+          if (!ok) {
+            showToast(false, j.message || '打开目录失败');
+            return;
+          }
+          showToast(true, '已打开目录');
+        } catch (e) {
+          showToast(false, '打开目录失败');
+        }
+      };
+
+      const renderTaskProgress = (taskId) => {
+        const t = taskId ? taskIndex.get(taskId) : null;
+        if (!t) return;
+        el('taskProgressTitle').textContent = String(t.id || '-') + ' 任务进度';
+        const host = el('taskProgressRows');
+        host.innerHTML = '';
+        const sid = String(t.id || '').split('-')[0] || '';
+        const group = latestTasks.filter(x => String(x.id || '').split('-')[0] === sid);
+        const hasCamera = group.some(g => g.type === 'download' || g.type === 'transcode');
+        const hasCourse = group.some(g => g.type === 'asr' || g.type === 'subtitle' || g.type === 'analysis');
+        const stageToType = hasCamera && !hasCourse
+          ? [['DOWNLOAD', 'download'], ['TRANSCODE', 'transcode']]
+          : hasCourse && !hasCamera
+            ? [['SPEECH', 'asr'], ['SUBTITLE', 'subtitle'], ['ANALYSIS', 'analysis']]
+            : [
+                ['DOWNLOAD', 'download'],
+                ['TRANSCODE', 'transcode'],
+                ['SPEECH', 'asr'],
+                ['SUBTITLE', 'subtitle'],
+                ['ANALYSIS', 'analysis'],
+              ];
+        const map = new Map();
+        for (const g of group) map.set(String(g.type || ''), g);
+        let activeStage = '';
+        for (const [label, type] of stageToType) {
+          const it = map.get(type);
+          if (it && (it.statusType === 'running' || it.statusType === 'paused' || it.statusType === 'error')) { activeStage = label; break; }
+        }
+        if (!activeStage) {
+          for (const [label, type] of stageToType) {
+            const it = map.get(type);
+            if (it && it.statusType === 'pending') { activeStage = label; break; }
+          }
+        }
+        for (const [label, type] of stageToType) {
+          const it = map.get(type) || null;
+          let stText = '未开始';
+          let stCls = 'text-slate-500';
+          let startAt = '/';
+          let endAt = '/';
+          if (it) {
+            if (it.statusType === 'pending') { stText = '等待中'; stCls = 'text-amber-500'; }
+            else if (it.statusType === 'running') { stText = '进行中'; stCls = 'text-blue-600'; }
+            else if (it.statusType === 'paused') { stText = '已暂停'; stCls = 'text-blue-600'; }
+            else if (it.statusType === 'completed') { stText = '已完成'; stCls = 'text-emerald-600'; }
+            else if (it.statusType === 'error') { stText = '失败'; stCls = 'text-rose-600'; }
+            startAt = it.startTime ? fmtDateTimeSec(it.startTime) : '/';
+            endAt = it.endTime ? fmtDateTimeSec(it.endTime) : '/';
+            if (it.statusType !== 'completed') endAt = '/';
+          }
+          const row = document.createElement('div');
+          row.className = 'grid grid-cols-12 text-sm ' + (activeStage === label ? 'bg-blue-100/60' : 'bg-white');
+          row.innerHTML = `
+            <div class="col-span-3 px-4 py-3 text-slate-700 font-medium">${label}</div>
+            <div class="col-span-3 px-4 py-3 ${stCls} font-medium">${stText}</div>
+            <div class="col-span-3 px-4 py-3 text-slate-700 font-mono">${startAt}</div>
+            <div class="col-span-3 px-4 py-3 text-slate-700 font-mono">${endAt}</div>
+          `;
+          host.appendChild(row);
+        }
+        showOverlay('taskProgressOverlay');
+        lucide.createIcons();
+      };
+
+      const typeMap = {
+        '下载': 'download',
+        '转码': 'transcode',
+        '语音转写': 'asr',
+        '字幕挂载': 'subtitle',
+        '视频分析': 'analysis'
+      };
+
+      const applyFilters = (tasks) => {
+        let out = tasks.slice();
+        if (filterType !== '全部') {
+          const t = typeMap[filterType];
+          out = out.filter(x => x.type === t);
+        }
+        if (statusFilter) {
+          if (statusFilter === 'running') out = out.filter(x => x.statusType === 'running' || x.statusType === 'paused' || x.statusType === 'error');
+          else if (statusFilter === 'completed') out = out.filter(x => x.statusType === 'completed');
+          else out = out.filter(x => x.statusType === statusFilter);
+        }
+        return out;
+      };
+
+      const ensureVisibleStatusFilter = (tasks) => {
+        const all = Array.isArray(tasks) ? tasks : [];
+        const visible = applyFilters(all);
+        if (visible.length > 0) return;
+        const hasRunning = all.some(t => t.statusType === 'running' || t.statusType === 'paused' || t.statusType === 'error');
+        const hasPending = all.some(t => t.statusType === 'pending');
+        if (statusFilter === 'running' && !hasRunning && hasPending) {
+          setActiveStatusFilter('pending');
+          return;
+        }
+        if (statusFilter === 'pending' && !hasPending && hasRunning) {
+          setActiveStatusFilter('running');
+          return;
+        }
+      };
+
+      const setActiveTypeFilter = (next, opts = {}) => {
+        filterType = next;
+        currentTasksPage = 1;
+        const wrap = el('taskTypeFilters');
+        for (const btn of wrap.querySelectorAll('button[data-filter-type]')) {
+          const isActive = btn.getAttribute('data-filter-type') === next;
+          btn.className = 'px-4 py-1.5 text-sm rounded-md transition-all ' + (isActive
+            ? 'bg-white text-violet-600 shadow-sm font-medium'
+            : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50');
+        }
+        renderTaskList();
+        if (!(opts && opts.skipRefresh)) {
+          refreshTasks({ force: true, page: 1 }).catch(() => {});
+        }
+      };
+
+      const setActiveStatusFilter = (next, opts = {}) => {
+        statusFilter = next;
+        if (!opts || !opts.keepPage) currentTasksPage = 1;
+        renderCompletedRangeControls();
+        const thdr = document.getElementById('timeColHeader');
+        if (thdr) thdr.textContent = next === 'completed' ? '完成时间' : '开始时间';
+        const cards = [
+          ['running', el('statusRunningCard'), 'border-violet-500 ring-2 ring-violet-100'],
+          ['pending', el('statusPendingCard'), 'border-blue-500 ring-2 ring-blue-100'],
+          ['completed', el('statusCompletedCard'), 'border-emerald-500 ring-2 ring-emerald-100'],
+          ['error', el('statusErrorCard'), 'border-rose-500 ring-2 ring-rose-100'],
+        ];
+        for (const [k, node, activeCls] of cards) {
+          node.className = node.className
+            .replace(/\bborder-(violet|blue|emerald|rose)-500\b/g, 'border-slate-200')
+            .replace(/\bring-2\b/g, '')
+            .replace(/\bring-(violet|blue|emerald|rose)-100\b/g, '');
+          if (statusFilter === k) {
+            node.className = node.className.replace('border-slate-200', activeCls);
+          }
+        }
+        const tabs = el('taskStatusTabs');
+        if (tabs) {
+          for (const btn of tabs.querySelectorAll('button[data-status]')) {
+            const isActive = btn.getAttribute('data-status') === next;
+            btn.className = 'pb-2 border-b-2 transition-colors ' + (isActive ? 'border-blue-600 text-blue-600 font-medium' : 'border-transparent text-slate-500 hover:text-slate-700');
+          }
+        }
+        renderTaskList();
+        if (!(opts && opts.skipRefresh)) {
+          refreshTasks({ force: true, page: currentTasksPage }).catch(() => {});
+        }
+      };
+
+      const setBar = (barEl, pct) => {
+        const p = Math.max(0, Math.min(100, pct));
+        barEl.style.width = p + '%';
+      };
+
+      const taskTypeFrom = (taskKind, stage) => {
+        if (stage === 'DOWNLOAD') return 'download';
+        if (stage === 'TRANSCODE') return 'transcode';
+        if (stage === 'SPEECH') return 'asr';
+        if (stage === 'SUBTITLE') return 'subtitle';
+        if (stage === 'ANALYSIS') return 'analysis';
+        if (taskKind === 'CameraTask') return 'download';
+        if (taskKind === 'CourseTask') return 'analysis';
+        return 'other';
+      };
+
+      const typeLabel = (t) => {
+        if (t === 'download') return '下载';
+        if (t === 'transcode') return '转码';
+        if (t === 'asr') return '语音转写';
+        if (t === 'subtitle') return '字幕挂载';
+        if (t === 'analysis') return '视频分析';
+        return '任务';
+      };
+
+      const iconForType = (t) => {
+        if (t === 'analysis') return 'activity';
+        if (t === 'transcode') return 'file-video';
+        if (t === 'download') return 'download';
+        if (t === 'subtitle') return 'file-text';
+        if (t === 'asr') return 'mic';
+        return 'file';
+      };
+
+      const decorateIconBox = (box, t) => {
+        const cls = box.classList;
+        cls.remove('bg-slate-50','border-slate-200','text-slate-600','bg-violet-50','border-violet-100','text-violet-600','bg-blue-50','border-blue-100','text-blue-600','bg-emerald-50','border-emerald-100','text-emerald-600','bg-amber-50','border-amber-100','text-amber-500');
+        if (t === 'analysis') { cls.add('bg-violet-50','border-violet-100','text-violet-600'); return; }
+        if (t === 'transcode') { cls.add('bg-blue-50','border-blue-100','text-blue-600'); return; }
+        if (t === 'download') { cls.add('bg-emerald-50','border-emerald-100','text-emerald-600'); return; }
+        cls.add('bg-amber-50','border-amber-100','text-amber-500');
+      };
+
+      const setServiceStatus = (mode, errorMsg) => {
+        const wrap = el('serviceStatus');
+        const dot = el('serviceDot');
+        const text = el('serviceStatusText');
+        wrap.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium';
+        dot.className = 'w-2 h-2 rounded-full animate-pulse';
+        if (mode === 'running') {
+          wrap.classList.add('bg-emerald-50','border-emerald-100','text-emerald-600');
+          dot.classList.add('bg-emerald-500');
+          text.textContent = '运行中';
+          return;
+        }
+        if (mode === 'failed') {
+          wrap.classList.add('bg-rose-50','border-rose-100','text-rose-600');
+          dot.classList.add('bg-rose-500');
+          text.textContent = errorMsg ? ('心跳异常') : '启动失败';
+          return;
+        }
+        if (mode === 'heartbeat') {
+          wrap.classList.add('bg-amber-50','border-amber-100','text-amber-600');
+          dot.classList.add('bg-amber-500');
+          text.textContent = '心跳中';
+          return;
+        }
+        wrap.classList.add('bg-slate-100','border-slate-200','text-slate-500');
+        dot.classList.add('bg-slate-400');
+        text.textContent = '未启动';
+      };
+
+      const renderHeartbeat = (hb) => {
+        latestHeartbeat = hb || null;
+        const lastAt = hb && hb.lastSuccessAt ? hb.lastSuccessAt : (hb && hb.lastAttemptAt ? hb.lastAttemptAt : '');
+        const badge = el('heartbeatBadge');
+        badge.className = 'w-2 h-2 rounded-full animate-pulse';
+        const status = String(hb && hb.status || 'idle');
+        if (status === 'success') {
+          badge.classList.add('bg-emerald-500');
+        } else if (status === 'failed') {
+          badge.classList.add('bg-rose-500');
+        } else {
+          badge.classList.add('bg-slate-400');
+        }
+        const titleMap = { success: '心跳正常', failed: '心跳失败', idle: '心跳未启动' };
+        el('heartbeatTooltipTitle').textContent = titleMap[status] || '心跳进行中';
+        el('heartbeatTooltipTime').textContent = '最近心跳：' + (lastAt ? fmt(lastAt) : '-');
+        currentMeta.heartbeatStatus = status;
+        currentMeta.lastHeartbeatAt = lastAt || '';
+        const errEl = el('heartbeatTooltipError');
+        const errMsg = String(hb && hb.lastError || '').trim();
+        errEl.textContent = errMsg ? ('最近错误：' + errMsg) : '';
+        errEl.classList.toggle('hidden', !errMsg);
+      };
+
+      const fetchHeartbeatStatus = async () => {
+        try {
+          const res = await fetch('/api/heartbeat-status', { cache: 'no-store' });
+          if (!res.ok) throw new Error('bad status');
+          const hb = await res.json();
+          renderHeartbeat(hb);
+          return hb;
+        } catch (e) {
+          renderHeartbeat(null);
+          return null;
+        }
+      };
+
+      const tickMetrics = async () => {
+        try {
+          const res = await fetch('/api/metrics', { cache: 'no-store' });
+          if (!res.ok) throw new Error('bad status');
+          const m = await res.json();
+          const cpu = Math.round(Number(m.cpu || 0));
+          const ram = Math.round(Number(m.ram || 0));
+          const diskRaw = Number(m.disk || 0);
+          const disk = diskRaw < 1 ? Number(diskRaw.toFixed(1)) : Math.round(diskRaw);
+          const gpu = Math.round(Number(m.gpu || 0));
+          el('cpuText').textContent = cpu + '%';
+          el('ramText').textContent = ram + '%';
+          el('diskText').textContent = disk + '%';
+          el('gpuText').textContent = gpu + '%';
+          setBar(el('cpuBar'), cpu);
+          setBar(el('ramBar'), ram);
+          setBar(el('diskBar'), diskRaw);
+          setBar(el('gpuBar'), gpu);
+        } catch (e) {
+          el('cpuText').textContent = '0%';
+          el('ramText').textContent = '0%';
+          el('diskText').textContent = '0%';
+          el('gpuText').textContent = '0%';
+          setBar(el('cpuBar'), 0);
+          setBar(el('ramBar'), 0);
+          setBar(el('diskBar'), 0);
+          setBar(el('gpuBar'), 0);
+        }
+      };
+
+      const upsertTaskRow = (r) => {
+        const existing = taskRowNodes.get(r.id);
+        const tpl = el('taskRowTpl');
+        const root = existing || tpl.content.firstElementChild.cloneNode(true);
+        root.dataset.taskId = r.id;
+        root.dataset.statusType = r.statusType;
+        root.querySelector('[data-role="name"]').textContent = r.name;
+        const idBtn = root.querySelector('[data-role="idBtn"]');
+        idBtn.textContent = r.displayId || r.id;
+        idBtn.className = 'text-xs font-mono mt-0.5 text-blue-600 hover:text-blue-700 hover:underline';
+        const classWrap = root.querySelector('[data-role="classInfo"]');
+        classWrap.textContent = '';
+        const classTxt = document.createElement('span');
+        classTxt.textContent = r.classInfo || '-';
+        classTxt.className = 'whitespace-nowrap';
+        classWrap.appendChild(classTxt);
+        const stype = Number(r.taskType || 0);
+        const tagText = stype === 1 ? '老师画面' : stype === 2 ? '学员画面' : stype === 3 ? '课件画面' : '';
+        if (tagText) {
+          const tag = document.createElement('span');
+          tag.textContent = tagText;
+          tag.className = 'inline-flex items-center shrink-0 whitespace-nowrap px-2 py-0.5 rounded-full text-xs font-medium border ' + (stype === 1
+            ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
+            : stype === 2
+              ? 'bg-violet-50 text-violet-600 border-violet-200'
+              : 'bg-amber-50 text-amber-600 border-amber-200');
+          classWrap.appendChild(tag);
+        }
+
+        const lessonLine = (r.lessonInfo || '-');
+        const range = fmtRange(r.lessonStartAt, r.lessonEndAt);
+        root.querySelector('[data-role="lessonInfo"]').textContent = range !== '-' ? (lessonLine + '（' + range + '）') : lessonLine;
+        const st = root.querySelector('[data-role="status"]');
+        st.textContent = r.status || '-';
+        st.className = 'text-sm font-medium pr-6 ' + (r.statusType === 'completed'
+          ? 'text-emerald-600'
+          : r.statusType === 'error'
+            ? 'text-rose-600'
+            : r.statusType === 'pending' || r.statusType === 'paused'
+              ? 'text-slate-500'
+              : 'text-slate-800');
+        const bar = root.querySelector('[data-role="bar"]');
+        bar.className = 'h-full rounded-full ' + (r.statusType === 'completed'
+          ? 'bg-emerald-500'
+          : r.statusType === 'error'
+            ? 'bg-rose-500'
+            : 'bg-violet-500');
+        setBar(bar, Number(r.progress || 0));
+        root.querySelector('[data-role="pct"]').textContent = String(Number(r.progress || 0)) + '%';
+        root.querySelector('[data-role="startTime"]').textContent = r.statusType === 'pending' ? '-' : (r.statusType === 'completed' && r.endTime ? fmtDateTimeSec(r.endTime) : fmtDateTimeSec(r.startTime));
+
+        const dd = root.querySelector('[data-role="downloadDetail"]');
+        const dText = String(r.detail || '').trim();
+        if (dText && (r.type === 'download' || r.type === 'transcode' || r.type === 'asr' || r.type === 'subtitle' || r.type === 'analysis')) {
+          dd.textContent = dText;
+          dd.classList.remove('hidden');
+        } else {
+          dd.classList.add('hidden');
+        }
+
+        const iconBox = root.querySelector('[data-role="iconBox"]');
+        decorateIconBox(iconBox, r.type);
+        iconBox.classList.toggle('cursor-pointer', r.type === 'download');
+        const icon = iconBox.querySelector('[data-role="icon"]');
+        icon.setAttribute('data-lucide', iconForType(r.type));
+
+        const pauseBtn = root.querySelector('[data-role="pauseBtn"]');
+        const startBtn = root.querySelector('[data-role="startBtn"]');
+        const stopBtn = root.querySelector('[data-role="stopBtn"]');
+        const resumeBtn = root.querySelector('[data-role="resumeBtn"]');
+        const retryBtn = root.querySelector('[data-role="retryBtn"]');
+        const reprocessBtn = root.querySelector('[data-role="reprocessBtn"]');
+        const cancelBtn = root.querySelector('[data-role="cancelBtn"]');
+        const openFolderBtn = root.querySelector('[data-role="openFolderBtn"]');
+        const openTranscodeFolderBtn = root.querySelector('[data-role="openTranscodeFolderBtn"]');
+        const playBtn = root.querySelector('[data-role="playBtn"]');
+        const speechReportBtn = root.querySelector('[data-role="speechReportBtn"]');
+        const analysisReportBtn = root.querySelector('[data-role="analysisReportBtn"]');
+        const rerunBtn = root.querySelector('[data-role="rerunBtn"]');
+        pauseBtn.classList.add('hidden');
+        startBtn.classList.add('hidden');
+        stopBtn.classList.add('hidden');
+        resumeBtn.classList.add('hidden');
+        retryBtn.classList.add('hidden');
+        reprocessBtn.classList.add('hidden');
+        cancelBtn.classList.add('hidden');
+        openFolderBtn.classList.add('hidden');
+        openTranscodeFolderBtn.classList.add('hidden');
+        playBtn.classList.add('hidden');
+        speechReportBtn.classList.add('hidden');
+        analysisReportBtn.classList.add('hidden');
+        rerunBtn.classList.add('hidden');
+        const isDownloadStage = r.type === 'download' && /-DOWNLOAD$/.test(String(r.id || ''));
+        const isTranscodeStage = r.type === 'transcode' && /-TRANSCODE$/.test(String(r.id || ''));
+        const isSpeechStage = r.type === 'asr' && /-SPEECH$/.test(String(r.id || ''));
+        const isSubtitleStage = r.type === 'subtitle' && /-SUBTITLE$/.test(String(r.id || ''));
+        const isAnalysisStage = r.type === 'analysis' && /-ANALYSIS$/.test(String(r.id || ''));
+        const canRerunStage = isDownloadStage || isTranscodeStage || isSpeechStage || isSubtitleStage || isAnalysisStage;
+        if (isDownloadStage && r.statusType !== 'pending') openFolderBtn.classList.remove('hidden');
+        if (isTranscodeStage && (r.statusType === 'running' || r.statusType === 'paused' || r.statusType === 'completed')) openTranscodeFolderBtn.classList.remove('hidden');
+        if (r.statusType === 'running') {
+          if (isDownloadStage || isTranscodeStage || isSpeechStage) {
+            pauseBtn.classList.remove('hidden');
+            stopBtn.classList.remove('hidden');
+          }
+        } else if (r.statusType === 'paused') {
+          if (isDownloadStage || isTranscodeStage || isSpeechStage) {
+            resumeBtn.classList.remove('hidden');
+            stopBtn.classList.remove('hidden');
+          }
+        } else if (r.statusType === 'completed') {
+          if (isDownloadStage || isTranscodeStage) playBtn.classList.remove('hidden');
+          if (isSpeechStage) speechReportBtn.classList.remove('hidden');
+          if (isAnalysisStage) {
+            analysisReportBtn.classList.remove('hidden');
+          }
+          if (isDownloadStage && !!r.canReprocess) reprocessBtn.classList.remove('hidden');
+          if (canRerunStage) rerunBtn.classList.remove('hidden');
+        } else if (r.statusType === 'error') {
+          retryBtn.classList.remove('hidden');
+          stopBtn.classList.remove('hidden');
+          if (isDownloadStage && !!r.canReprocess) reprocessBtn.classList.remove('hidden');
+        } else if (r.statusType === 'pending') {
+          if (isDownloadStage || isSpeechStage || isTranscodeStage) startBtn.classList.remove('hidden');
+        }
+
+        pauseBtn.title = isSpeechStage ? '暂停任务' : '暂停任务';
+        resumeBtn.title = isSpeechStage ? '继续转写' : '继续任务';
+        retryBtn.title = isSpeechStage ? '重新转写' : '重新执行';
+        stopBtn.title = isSpeechStage ? '终止任务' : '终止任务';
+
+        taskIndex.set(r.id, r);
+        taskRowNodes.set(r.id, root);
+        return root;
+      };
+
+      const renderTasks = (tasks) => {
+        const host = el('taskRows');
+        taskIndex = new Map();
+        renderTaskRefreshState();
+        renderTaskPagination();
+        renderTaskSearchControls();
+        renderCompletedRangeControls();
+        renderTaskListState(tasks.length);
+        const nextIds = new Set(tasks.map(r => String(r.id || '')));
+        for (const [taskId, node] of Array.from(taskRowNodes.entries())) {
+          if (nextIds.has(taskId)) continue;
+          if (node && node.parentNode === host) host.removeChild(node);
+          taskRowNodes.delete(taskId);
+        }
+        for (const r of tasks) {
+          const root = upsertTaskRow(r);
+          host.appendChild(root);
+        }
+        lucide.createIcons();
+      };
+
+      const mapStateToRows = (s) => {
+        const out = [];
+        const running = s.running || null;
+        if (running) {
+          const t = taskTypeFrom(running.taskKind, running.stage);
+          const pct = Math.round((Number(running.progress || 0)) * 100);
+          const st = running.status === 'FAILED' ? 'error' : running.status === 'SUCCEEDED' ? 'completed' : 'running';
+          out.push({
+            id: running.taskId,
+            type: t,
+            name: typeLabel(t),
+            classInfo: '-',
+            lessonInfo: '-',
+            status: running.message || (running.status === 'SUCCEEDED' ? '完成' : running.status === 'FAILED' ? '失败' : '执行中'),
+            statusType: st,
+            progress: pct,
+            startTime: running.startedAt || '-'
+          });
+        }
+        for (const q of (s.queue || [])) {
+          const t = taskTypeFrom(q.taskKind, '');
+          out.push({
+            id: q.taskId,
+            type: t,
+            name: typeLabel(t),
+            classInfo: '-',
+            lessonInfo: '-',
+            status: '等待中',
+            statusType: 'pending',
+            progress: 0,
+            startTime: '-'
+          });
+        }
+        return out;
+      };
+
+      const normalizeVisibleTasks = (tasks) => {
+        const all = Array.isArray(tasks) ? tasks : [];
+        const downloadState = new Map();
+        for (const t of all) {
+          if (String(t.type || '') !== 'download') continue;
+          downloadState.set(String(t.serverTaskId || ''), String(t.statusType || ''));
+        }
+        return all.filter(t => {
+          if (String(t.type || '') !== 'transcode') return true;
+          const sid = String(t.serverTaskId || '');
+          const dlStatus = downloadState.get(sid);
+          if (!dlStatus) return true;
+          return dlStatus === 'completed';
+        });
+      };
+
+      const getRenderableTasks = () => {
+        const connected = !!String(currentMeta.serverAddress || '').trim();
+        const addr = String(currentMeta.serverAddress || '').trim().toLowerCase();
+        const useMock = !connected || addr === 'mock' || addr.startsWith('mock://');
+        const all = normalizeVisibleTasks(useMock ? [] : (Array.isArray(latestTasks) ? latestTasks : []));
+        if (statusFilter === 'completed') {
+          return applyFilters(all);
+        }
+        return applyFilters(sortTasks(all));
+      };
+
+      const renderTaskList = () => {
+        renderTasks(getRenderableTasks());
+      };
+
+      const parseTaskRef = (taskId) => {
+        const tid = String(taskId || '').trim();
+        if (!tid || tid.indexOf('-') < 0) return { serverId: '', step: '' };
+        const idx = tid.indexOf('-');
+        return {
+          serverId: tid.slice(0, idx).trim(),
+          step: tid.slice(idx + 1).trim().toUpperCase()
+        };
+      };
+
+      const affectedTaskIdsForAction = (action, taskId) => {
+        const parsed = parseTaskRef(taskId);
+        const serverId = String(parsed.serverId || '');
+        const step = String(parsed.step || '');
+        if (!serverId || !step) return new Set([String(taskId || '')]);
+        const steps = action === 'rerun'
+          ? (step === 'DOWNLOAD'
+            ? ['DOWNLOAD', 'TRANSCODE', 'SPEECH', 'SUBTITLE', 'ANALYSIS']
+            : step === 'TRANSCODE'
+              ? ['TRANSCODE', 'SPEECH', 'SUBTITLE', 'ANALYSIS']
+              : step === 'SPEECH'
+                ? ['SPEECH', 'SUBTITLE', 'ANALYSIS']
+                : step === 'SUBTITLE'
+                  ? ['SUBTITLE', 'ANALYSIS']
+                  : [step])
+          : (action === 'stop' && step === 'DOWNLOAD'
+            ? ['DOWNLOAD', 'TRANSCODE']
+            : [step]);
+        return new Set(steps.map(s => serverId + '-' + s));
+      };
+
+      const executeTaskSearch = async () => {
+        const now = Date.now();
+        if (taskSearchInFlight || now < taskSearchCooldownUntil) {
+          renderTaskSearchControls();
+          return;
+        }
+        taskSearchKeyword = String(el('taskSearchInput') && el('taskSearchInput').value || '').trim();
+        currentTasksPage = 1;
+        taskSearchInFlight = true;
+        taskSearchCooldownUntil = now + 3000;
+        setActiveTypeFilter('全部', { skipRefresh: true });
+        renderTaskSearchControls();
+        try {
+          await refreshTasks({ force: true, page: 1 });
+          await tick();
+        } finally {
+          taskSearchInFlight = false;
+          renderTaskSearchControls();
+          setTimeout(renderTaskSearchControls, Math.max(0, taskSearchCooldownUntil - Date.now()) + 10);
+        }
+      };
+
+      const changeTaskRoomFilter = async () => {
+        taskRoomFilter = String(el('taskRoomFilterSelect') && el('taskRoomFilterSelect').value || '').trim();
+        currentTasksPage = 1;
+        await refreshTasks({ force: true, page: 1 });
+      };
+
+      const changeCompletedRange = async () => {
+        completedRange = String(el('completedRangeSelect') && el('completedRangeSelect').value || '7d').trim() || '7d';
+        if (completedRange !== 'custom') {
+          completedStartDate = '';
+          completedEndDate = '';
+        }
+        currentTasksPage = 1;
+        renderCompletedRangeControls();
+        await refreshTasks({ force: true, page: 1 });
+      };
+
+      const changeCompletedCustomDate = async () => {
+        completedStartDate = String(el('completedStartDateInput') && el('completedStartDateInput').value || '').trim();
+        completedEndDate = String(el('completedEndDateInput') && el('completedEndDateInput').value || '').trim();
+        if (completedRange !== 'custom') return;
+        currentTasksPage = 1;
+        await refreshTasks({ force: true, page: 1 });
+      };
+
+      const applyImmediateTaskActionState = (action, taskId) => {
+        const affected = affectedTaskIdsForAction(action, taskId);
+        if (!affected.size || !Array.isArray(latestTasks) || latestTasks.length === 0) return;
+        const nowIso = new Date().toISOString();
+        const nextStatusType = action === 'stop'
+          ? 'pending'
+          : action === 'pause'
+            ? 'paused'
+            : 'running';
+        const nextStatus = action === 'stop'
+          ? '等待中'
+          : action === 'pause'
+            ? '已暂停'
+            : '进行中';
+        const nextDetail = action === 'stop'
+          ? '已提交终止，正在刷新状态'
+          : action === 'pause'
+            ? '已提交暂停，正在刷新状态'
+            : action === 'resume'
+              ? '已提交继续，正在刷新状态'
+              : action === 'reprocess'
+                ? '已提交重新处理，正在刷新状态'
+              : '已提交重新执行，正在刷新状态';
+        let changed = false;
+        latestTasks = latestTasks.map(t => {
+          if (!affected.has(String(t && t.id || ''))) return t;
+          changed = true;
+          return {
+            ...t,
+            status: nextStatus,
+            statusType: nextStatusType,
+            progress: action === 'pause' || action === 'resume'
+              ? Number(t && t.progress || 0)
+              : 0,
+            endTime: '',
+            startTime: action === 'stop' || action === 'pause' ? (String(t && t.startTime || '').trim() || nowIso) : (String(t && t.startTime || '').trim() || nowIso),
+            detail: nextDetail
+          };
+        });
+        if (!changed) return;
+        if (latestState) renderState(latestState);
+        else renderTaskList();
+      };
+
+      const clearTaskRefreshBurst = () => {
+        for (const timer of taskRefreshBurstTimers) clearTimeout(timer);
+        taskRefreshBurstTimers = [];
+      };
+
+      const scheduleTaskRefreshBurst = (withPoll) => {
+        clearTaskRefreshBurst();
+        const delays = [350, 1200, 2500];
+        delays.forEach((delay, idx) => {
+          const timer = setTimeout(async () => {
+            try {
+              await refreshTasks({ force: true });
+              await tick();
+            } catch (e) {}
+          }, delay);
+          taskRefreshBurstTimers.push(timer);
+        });
+      };
+
+      const renderState = (s) => {
+        // nodeIp 将由 fetchLocalIp 单独更新
+        el('lastPollAt').textContent = fmt(s.lastPollAt);
+        // lastReportAt 优先用接口返回的全局最近上报时间，其次用当前运行任务的上报时间
+        const lr = s.lastReportAt || s.running?.lastReportAt || null;
+        el('lastReportAt').textContent = lr ? fmt(lr) : '-';
+
+        const upSec = Math.floor((Date.now() - startedAtLocalMs) / 1000);
+        const h = String(Math.floor(upSec / 3600)).padStart(2,'0');
+        const m = String(Math.floor((upSec % 3600) / 60)).padStart(2,'0');
+        const ss = String(upSec % 60).padStart(2,'0');
+        el('uptime').textContent = h + ':' + m + ':' + ss;
+
+        const connected = !!String(currentMeta.serverAddress || '').trim();
+        const addr = String(currentMeta.serverAddress || '').trim().toLowerCase();
+        const useMock = !connected || addr === 'mock' || addr.startsWith('mock://');
+        const counts = latestTaskStatusCounts || { pending: 0, running: 0, completed: 0, error: 0, all: 0 };
+
+        if (!autoPickedStatus && Number(counts.all || 0) > 0) {
+          const hasRunning = Number(counts.running || 0) > 0;
+          const hasPending = Number(counts.pending || 0) > 0;
+          if (!hasRunning && hasPending) setActiveStatusFilter('pending', { skipRefresh: true });
+          autoPickedStatus = true;
+        }
+
+        el('pendingTabCount').textContent = String(Number(counts.pending || 0));
+        el('runningTabCount').textContent = String(Number(counts.running || 0));
+
+        el('runningCount').textContent = String(Number(counts.running || 0));
+        el('queueCount').textContent = String(Number(counts.pending || 0));
+        el('completedCount').textContent = String(Number(counts.completed || 0));
+        const failedCount = Number(counts.error || 0);
+        el('failedCount').textContent = String(failedCount);
+
+        const heartbeatStatus = String(latestHeartbeat && latestHeartbeat.status || '');
+        const status = !connected ? 'stopped' : (heartbeatStatus === 'failed' ? 'failed' : (heartbeatStatus === 'success' ? 'running' : (heartbeatStatus === 'idle' ? (s.lastError && !useMock ? 'failed' : 'running') : 'heartbeat')));
+        const statusError = heartbeatStatus === 'failed' ? String(latestHeartbeat && latestHeartbeat.lastError || '') : '';
+        setServiceStatus(status, statusError);
+
+        renderTaskList();
+      };
+
+      const refreshTasks = async (opts = {}) => {
+        const force = !!(opts && opts.force);
+        const requestedPage = Math.max(1, Number((opts && opts.page) || currentTasksPage || 1));
+        const requestedStatus = String(statusFilter || 'running');
+        if (!force && statusFilter === 'completed' && lastCompletedAutoRefreshAt && Date.now() - lastCompletedAutoRefreshAt < COMPLETED_TASK_REFRESH_INTERVAL_MS) {
+          return;
+        }
+        if (tasksInFlight) {
+          if (!force) return;
+          try { tasksInFlight.abort(); } catch (e) {}
+          tasksInFlight = null;
+        }
+        const connected = !!String(currentMeta.serverAddress || '').trim();
+        const addr = String(currentMeta.serverAddress || '').trim().toLowerCase();
+        const useMock = !connected || addr === 'mock' || addr.startsWith('mock://');
+        if (useMock) {
+          latestTasks = [];
+          taskRoomOptions = [];
+          latestTaskStatusCounts = { pending: 0, running: 0, completed: 0, error: 0, all: 0 };
+          currentTasksPage = 1;
+          currentTasksTotal = 0;
+          currentTasksTotalPages = 1;
+          tasksRefreshState = 'idle';
+          tasksRefreshError = '';
+          renderTaskList();
+          return;
+        }
+        const ac = new AbortController();
+        const to = setTimeout(() => ac.abort(), 8000);
+        tasksRefreshState = 'loading';
+        tasksRefreshError = '';
+        renderTaskRefreshState();
+        tasksInFlight = ac;
+        try {
+          const requestedType = filterType !== '全部' ? (typeMap[filterType] || 'all') : 'all';
+          const body = {
+            status: requestedStatus,
+            taskType: requestedType,
+            page: requestedPage,
+            pageSize: 20,
+            query: taskSearchKeyword,
+            roomName: taskRoomFilter
+          };
+          if (requestedStatus === 'completed') {
+            body.completedRange = completedRange;
+            body.completedStartDate = completedStartDate;
+            body.completedEndDate = completedEndDate;
+          }
+          const tr = await fetch('/api/tasks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            cache: 'no-store',
+            signal: ac.signal,
+            body: JSON.stringify(body)
+          });
+          const tj = await tr.json().catch(() => ({}));
+          if (tr.ok && tj && tj.ok && Array.isArray(tj.tasks)) {
+            latestTasks = tj.tasks.map(t => ({
+              id: t.id,
+              displayId: t.displayId || t.id,
+              type: t.type,
+              name: t.name,
+              classInfo: t.classInfo,
+              lessonInfo: t.lessonInfo,
+              lessonId: t.lessonId,
+              lessonDate: t.lessonDate,
+              roomName: t.roomName || '',
+              lessonStartAt: t.lessonStartAt,
+              lessonEndAt: t.lessonEndAt,
+              taskType: t.taskType,
+              status: t.status,
+              statusType: t.statusType,
+              progress: t.progress,
+              startTime: t.startTime,
+              endTime: t.endTime,
+              detail: t.detail || '',
+              outputFilePath: t.outputFilePath || '',
+              serverTaskId: t.serverTaskId || '',
+              canReprocess: !!t.canReprocess,
+              downloadMeta: t.downloadMeta || null
+            }));
+            const incomingCounts = tj.statusCounts || { pending: 0, running: 0, completed: 0, error: 0, all: 0 };
+            const shouldAutoSwitchToPending = !autoPickedStatus
+              && requestedStatus === 'running'
+              && Number(incomingCounts.running || 0) <= 0
+              && Number(incomingCounts.pending || 0) > 0;
+            latestTaskStatusCounts = requestedStatus === 'completed'
+              ? {
+                ...latestTaskStatusCounts,
+                completed: Number(incomingCounts.completed || 0),
+                error: Number(incomingCounts.error || latestTaskStatusCounts.error || 0),
+                all: Number(incomingCounts.all || latestTaskStatusCounts.all || 0)
+              }
+              : incomingCounts;
+            taskRoomOptions = Array.isArray(tj.roomOptions) ? tj.roomOptions.map(x => String(x || '').trim()).filter(Boolean) : [];
+            if (taskRoomFilter && !taskRoomOptions.includes(taskRoomFilter)) taskRoomFilter = '';
+            currentTasksPage = Math.max(1, Number(tj.page || requestedPage || 1));
+            currentTasksPageSize = 20;
+            currentTasksTotal = Math.max(0, Number(tj.total || 0));
+            currentTasksTotalPages = Math.max(1, Number(tj.totalPages || 1));
+            tasksRefreshState = 'idle';
+            tasksRefreshError = '';
+            if (requestedStatus === 'completed') lastCompletedAutoRefreshAt = Date.now();
+            if (shouldAutoSwitchToPending) {
+              autoPickedStatus = true;
+              setActiveStatusFilter('pending', { skipRefresh: true });
+              tasksInFlight = null;
+              clearTimeout(to);
+              await refreshTasks({ force: true, page: 1 });
+              return;
+            }
+            if (latestState) renderState(latestState);
+          }
+        } catch (e) {
+          tasksRefreshState = 'error';
+          tasksRefreshError = e && e.name === 'AbortError' ? 'timeout' : 'request_failed';
+          renderTaskRefreshState();
+        } finally {
+          clearTimeout(to);
+          tasksInFlight = null;
+        }
+      };
+
+      const tick = async () => {
+        try {
+          await fetchHeartbeatStatus();
+          const res = await fetch('/api/state', { cache: 'no-store' });
+          if (!res.ok) throw new Error('bad status');
+          const json = await res.json();
+          latestState = json;
+          renderState(json);
+        } catch (e) {
+          setServiceStatus('stopped');
+        }
+      };
+
+      let _vpTaskId = '';
+      let _vpSource = 'source';
+      const _fmtCueTime = (sec) => {
+        const total = Math.max(0, Math.floor(Number(sec || 0)));
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        const s = total % 60;
+        return h > 0
+          ? String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0')
+          : String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+      };
+      const _hideSubtitleHint = () => {
+        const tip = el('videoSubtitleHint');
+        tip.textContent = '';
+        tip.classList.add('hidden');
+      };
+      const _showSubtitleHint = (sec) => {
+        if (!(Number(sec || 0) > 3)) {
+          _hideSubtitleHint();
+          return;
+        }
+        const tip = el('videoSubtitleHint');
+        tip.textContent = '字幕从 ' + _fmtCueTime(sec) + ' 开始';
+        tip.classList.remove('hidden');
+      };
+      const _fetchFirstSubtitleCueSec = async (vttUrl) => {
+        try {
+          const resp = await fetch(vttUrl, { cache: 'no-store' });
+          if (!resp.ok) return null;
+          const text = await resp.text();
+          const lines = String(text || '').split(/\r?\n/);
+          const cuePattern = new RegExp('^(\\d{2}):(\\d{2}):(\\d{2})\\.(\\d{3})\\s+-->\\s+');
+          for (const line of lines) {
+            const m = line.match(cuePattern);
+            if (m) {
+              return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(m[4]) / 1000;
+            }
+          }
+        } catch (e) {}
+        return null;
+      };
+      const _showNoTranscode = (show) => {
+        const overlay = el('videoNoTranscode');
+        const vid = el('videoPlayerEl');
+        if (show) {
+          _hideSubtitleHint();
+          vid.classList.add('hidden');
+          overlay.classList.remove('hidden');
+        } else {
+          overlay.classList.add('hidden');
+          vid.classList.remove('hidden');
+        }
+      };
+      const _showTranscoding = (show) => {
+        const overlay = el('videoTranscoding');
+        const vid = el('videoPlayerEl');
+        if (show) {
+          _hideSubtitleHint();
+          vid.classList.add('hidden');
+          el('videoNoTranscode').classList.add('hidden');
+          overlay.classList.remove('hidden');
+        } else {
+          overlay.classList.add('hidden');
+          vid.classList.remove('hidden');
+        }
+      };
+      const _updateSourceTabs = () => {
+        for (const btn of el('videoSourceTabs').querySelectorAll('button[data-vsource]')) {
+          const active = btn.getAttribute('data-vsource') === _vpSource;
+          btn.className = 'px-3 py-1 text-xs rounded font-medium transition-all ' + (active ? 'bg-white text-violet-600 shadow-sm' : 'text-slate-500 hover:text-slate-700');
+        }
+      };
+      const _loadVideoSource = async () => {
+        const vid = el('videoPlayerEl');
+        vid.pause();
+        vid.onloadedmetadata = null;
+        vid.onerror = null;
+        vid.onended = null;
+        vid.removeAttribute('src');
+        vid.load();
+        if (window._hlsInstance) { window._hlsInstance.destroy(); window._hlsInstance = null; }
+        // 清理旧的 <track> 字幕轨道
+        vid.querySelectorAll('track').forEach(t => t.remove());
+        _hideSubtitleHint();
+        _showNoTranscode(false);
+        _showTranscoding(false);
+        vid.onended = () => {
+          closeVideoPlayer();
+        };
+        if (_vpSource === 'hls') {
+          // 检查当前任务是否正在转码中
+          const serverId = _vpTaskId.split('-')[0];
+          const tEntry = serverId ? taskIndex.get(serverId + '-TRANSCODE') : null;
+          if (tEntry && tEntry.statusType === 'running') {
+            // 正在转码中：显示提示层
+            _showTranscoding(true);
+            return;
+          }
+          const hlsUrl = '/api/task/video?id=' + encodeURIComponent(_vpTaskId) + '&source=hls';
+          try {
+            const probe = await fetch(hlsUrl, { method: 'HEAD' });
+            if (!probe.ok) {
+              _showNoTranscode(true);
+              return;
+            }
+          } catch (e) {
+            _showNoTranscode(true);
+            return;
+          }
+          if (window.Hls && Hls.isSupported()) {
+            const hls = new Hls({ subtitleDisplay: true });
+            hls.loadSource(hlsUrl);
+            hls.attachMedia(vid);
+            const hlsVttUrl = '/api/task/subtitle-vtt?id=' + encodeURIComponent(_vpTaskId) + '&source=hls';
+            _fetchFirstSubtitleCueSec(hlsVttUrl).then((sec) => {
+              if (sec != null) _showSubtitleHint(sec);
+            });
+            const _activateHlsSubs = () => {
+              if (hls.subtitleTracks && hls.subtitleTracks.length > 0) {
+                hls.subtitleTrack = 0;
+                hls.subtitleDisplay = true;
+              }
+              for (const tt of vid.textTracks) {
+                if (tt.kind === 'subtitles') tt.mode = 'showing';
+              }
+            };
+            hls.on(Hls.Events.MANIFEST_PARSED, () => { _activateHlsSubs(); vid.play(); });
+            hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => { _activateHlsSubs(); });
+            hls.on(Hls.Events.SUBTITLE_TRACK_LOADED, () => { _activateHlsSubs(); });
+            window._hlsInstance = hls;
+          } else if (vid.canPlayType('application/vnd.apple.mpegurl')) {
+            vid.src = hlsUrl;
+            vid.play();
+          } else {
+            showToast(false, '浏览器不支持HLS播放');
+          }
+        } else {
+          const sourceUrl = '/api/task/video?id=' + encodeURIComponent(_vpTaskId) + '&source=source';
+          vid.setAttribute('playsinline', 'playsinline');
+          vid.preload = 'metadata';
+          vid.src = sourceUrl;
+          const vttUrl = '/api/task/subtitle-vtt?id=' + encodeURIComponent(_vpTaskId) + '&source=source';
+          _fetchFirstSubtitleCueSec(vttUrl).then((sec) => {
+            if (sec != null) _showSubtitleHint(sec);
+          });
+          const track = document.createElement('track');
+          track.kind = 'subtitles';
+          track.label = '中文';
+          track.srclang = 'zh';
+          track.src = vttUrl;
+          track.default = true;
+          track.addEventListener('load', () => {
+            for (const tt of vid.textTracks) {
+              if (tt.language === 'zh') tt.mode = 'showing';
+            }
+          });
+          vid.appendChild(track);
+          vid.onloadedmetadata = () => {
+            for (const tt of vid.textTracks) {
+              if (tt.language === 'zh') tt.mode = 'showing';
+            }
+            const p = vid.play();
+            if (p && typeof p.catch === 'function') {
+              p.catch(() => {});
+            }
+          };
+          vid.onerror = () => {
+            showToast(false, '源视频加载失败');
+          };
+          vid.load();
+        }
+      };
+      const openVideoPlayer = (taskId) => {
+        _vpTaskId = taskId;
+        const t = taskIndex.get(taskId);
+        const isTranscode = t && t.type === 'transcode';
+        const serverTaskId = String(t && t.serverTaskId ? t.serverTaskId : String(taskId || '').split('-')[0] || '-');
+        el('videoPlayerTitle').textContent = `【${serverTaskId}】`;
+        _vpSource = isTranscode ? 'hls' : 'source';
+        el('videoPlayerOverlay').classList.remove('hidden');
+        _loadVideoSource();
+        lucide.createIcons();
+        _updateSourceTabs();
+      };
+      const closeVideoPlayer = () => {
+        el('videoPlayerOverlay').classList.add('hidden');
+        const vid = el('videoPlayerEl');
+        _hideSubtitleHint();
+        vid.onloadedmetadata = null;
+        vid.onerror = null;
+        vid.onended = null;
+        vid.pause();
+        vid.querySelectorAll('track').forEach(t => t.remove());
+        vid.removeAttribute('src');
+        vid.load();
+        if (window._hlsInstance) { window._hlsInstance.destroy(); window._hlsInstance = null; }
+        try {
+          const replacement = vid.cloneNode(false);
+          vid.parentNode.replaceChild(replacement, vid);
+        } catch (e) {}
+        try {
+          fetch('/api/task/video/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true }).catch(() => {});
+        } catch (e) {}
+        el('videoPlayerTitle').textContent = '视频播放';
+        _showNoTranscode(false);
+        _showTranscoding(false);
+      };
+      el('gotoTranscodeBtn').addEventListener('click', () => {
+        closeVideoPlayer();
+        setActiveStatusFilter('running');
+        // 定位到转码任务
+        const serverId = _vpTaskId.split('-')[0];
+        const transcodeId = serverId + '-TRANSCODE';
+        setTimeout(() => {
+          const rowEl = document.querySelector(`[data-task-id="${transcodeId}"]`);
+          if (rowEl) {
+            rowEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            rowEl.classList.add('ring-2', 'ring-violet-400', 'ring-offset-1');
+            setTimeout(() => rowEl.classList.remove('ring-2', 'ring-violet-400', 'ring-offset-1'), 2000);
+          }
+        }, 300);
+      });
+      el('startTranscodeBtn').addEventListener('click', async () => {
+        const serverId = _vpTaskId.split('-')[0];
+        const transcodeId = serverId + '-TRANSCODE';
+        try {
+          const res = await fetch('/api/task/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: transcodeId }) });
+          const j = await res.json().catch(() => ({}));
+          if (j.ok) {
+            showToast(true, '转码任务已启动');
+            closeVideoPlayer();
+            setActiveStatusFilter('running');
+            await refreshTasks();
+            await tick();
+          } else {
+            showToast(false, j.message || '启动转码失败');
+          }
+        } catch (e) {
+          showToast(false, '启动转码失败');
+        }
+      });
+      el('videoPlayerClose').addEventListener('click', closeVideoPlayer);
+      el('videoPlayerBg').addEventListener('click', closeVideoPlayer);
+      el('videoSourceTabs').addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-vsource]');
+        if (!btn) return;
+        const src = btn.getAttribute('data-vsource');
+        if (src === _vpSource) return;
+        _vpSource = src;
+        _updateSourceTabs();
+        _loadVideoSource();
+      });
+
+      const pollSync = async () => {
+        const connected = !!String(currentMeta.serverAddress || '').trim();
+        const addr = String(currentMeta.serverAddress || '').trim().toLowerCase();
+        const useMock = !connected || addr === 'mock' || addr.startsWith('mock://');
+        if (useMock) return;
+        const ac = new AbortController();
+        const to = setTimeout(() => ac.abort(), 20000);
+        try {
+          await fetch('/api/poll-sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ac.signal });
+        } catch (e) {
+        } finally {
+          clearTimeout(to);
+        }
+      };
+      const performTaskAction = async (action, taskId) => {
+        const apiMap = { start: '/api/task/start', pause: '/api/task/pause', resume: '/api/task/resume', stop: '/api/task/stop', retry: '/api/task/retry', rerun: '/api/task/rerun', reprocess: '/api/task/reprocess' };
+        const api = apiMap[action];
+        if (!api) {
+          showToast(false, '该操作暂不支持');
+          return;
+        }
+        const isSpeechStage = /-SPEECH$/.test(String(taskId || ''));
+        try {
+          const res = await fetch(api, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: taskId }) });
+          const j = await res.json().catch(() => ({}));
+          const ok = !!j.ok && res.ok;
+          const okMsg = action === 'start'
+            ? '操作成功！'
+            : (j.message || (action === 'pause'
+              ? '已暂停'
+              : action === 'resume'
+                ? (isSpeechStage ? '继续转写中' : '继续执行')
+              : action === 'stop'
+                ? '已终止'
+              : action === 'retry'
+                ? (isSpeechStage ? '重新转写中' : '重新执行中')
+              : action === 'rerun'
+                ? (isSpeechStage ? '重新转写中' : '重新执行中')
+              : action === 'reprocess'
+                ? '重新处理中'
+              : '操作成功！'));
+          const badMsg = j.message || (action === 'pause'
+            ? '暂停失败'
+            : action === 'resume'
+              ? (isSpeechStage ? '继续转写失败' : '继续失败')
+            : action === 'stop'
+              ? '终止失败'
+            : action === 'retry'
+              ? (isSpeechStage ? '重新转写失败' : '重新执行失败')
+            : action === 'rerun'
+              ? (isSpeechStage ? '重新转写失败' : '重新执行失败')
+            : action === 'reprocess'
+              ? '重新处理失败'
+            : '开始失败');
+          showToast(ok, ok ? okMsg : badMsg);
+          if (ok && (action === 'start' || action === 'retry' || action === 'rerun' || action === 'reprocess')) setActiveStatusFilter('running');
+          if (ok && (action === 'start' || action === 'retry' || action === 'rerun' || action === 'reprocess' || action === 'stop' || action === 'pause' || action === 'resume')) {
+            applyImmediateTaskActionState(action, taskId);
+            await refreshTasks({ force: true });
+            await tick();
+            scheduleTaskRefreshBurst(false);
+            return;
+          }
+          await refreshTasks({ force: true });
+          await tick();
+        } catch (e) {
+          showToast(false, action === 'pause'
+            ? '暂停失败'
+            : action === 'resume'
+              ? (isSpeechStage ? '继续转写失败' : '继续失败')
+              : action === 'stop'
+                ? '终止失败'
+                : action === 'retry'
+                  ? (isSpeechStage ? '重新转写失败' : '重新执行失败')
+                  : action === 'rerun'
+                    ? (isSpeechStage ? '重新转写失败' : '重新执行失败')
+                    : action === 'reprocess'
+                      ? '重新处理失败'
+                  : '开始失败');
+        }
+      };
+      el('refreshBtn').addEventListener('click', () => tick());
+      el('refreshTasksBtn').addEventListener('click', async () => { await pollSync(); await refreshTasks({ force: true, page: currentTasksPage }); await tick(); });
+      el('taskSearchBtn').addEventListener('click', () => { executeTaskSearch().catch(() => {}); });
+      el('taskSearchInput').addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        executeTaskSearch().catch(() => {});
+      });
+      el('taskSearchInput').addEventListener('input', () => {
+        renderTaskSearchControls();
+      });
+      el('taskRoomFilterSelect').addEventListener('change', () => {
+        changeTaskRoomFilter().catch(() => {});
+      });
+      el('completedRangeSelect').addEventListener('change', () => {
+        changeCompletedRange().catch(() => {});
+      });
+      el('completedStartDateInput').addEventListener('change', () => {
+        changeCompletedCustomDate().catch(() => {});
+      });
+      el('completedEndDateInput').addEventListener('change', () => {
+        changeCompletedCustomDate().catch(() => {});
+      });
+      el('openConnect').addEventListener('click', () => openConnectModal());
+      el('taskSettingsBtn').addEventListener('click', () => openConcurrencyModal());
+      el('connectClose').addEventListener('click', () => closeConnectModal());
+      el('connectCancelBtn').addEventListener('click', () => closeConnectModal());
+      el('concurrencyClose').addEventListener('click', () => closeConcurrencyModal());
+      el('concurrencyCancel').addEventListener('click', () => closeConcurrencyModal());
+      el('stopConfirmClose').addEventListener('click', () => closeStopConfirmModal());
+      el('stopConfirmCancel').addEventListener('click', () => closeStopConfirmModal());
+      el('stopConfirmOk').addEventListener('click', async () => {
+        const taskId = String(pendingStopTaskId || '').trim();
+        closeStopConfirmModal();
+        if (!taskId) return;
+        await performTaskAction('stop', taskId);
+      });
+      el('rerunConfirmClose').addEventListener('click', () => closeRerunConfirmModal());
+      el('rerunConfirmCancel').addEventListener('click', () => closeRerunConfirmModal());
+      el('rerunConfirmOk').addEventListener('click', async () => {
+        const taskId = String(pendingRerunTaskId || '').trim();
+        closeRerunConfirmModal();
+        if (!taskId) return;
+        await performTaskAction('rerun', taskId);
+      });
+      el('reprocessConfirmClose').addEventListener('click', () => closeReprocessConfirmModal());
+      el('reprocessConfirmCancel').addEventListener('click', () => closeReprocessConfirmModal());
+      el('reprocessConfirmOk').addEventListener('click', async () => {
+        const taskId = String(pendingReprocessTaskId || '').trim();
+        closeReprocessConfirmModal();
+        if (!taskId) return;
+        await performTaskAction('reprocess', taskId);
+      });
+      el('downloadPathInput').addEventListener('input', () => {
+        downloadPath = String(el('downloadPathInput').value || '').trim();
+      });
+      el('speechModelSelect').addEventListener('change', () => {
+        speechModel = String(el('speechModelSelect').value || 'medium').trim() || 'medium';
+      });
+      el('pickDownloadDirBtn').addEventListener('click', async () => {
+        const startPath = String(el('downloadPathInput').value || '').trim() || 'D:\\Videos';
+        try {
+          const res = await fetch('/api/select-folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ startPath }) });
+          const j = await res.json().catch(() => ({}));
+          const ok = !!j.ok && res.ok && j.path;
+          if (!ok) return;
+          downloadPath = String(j.path);
+          el('downloadPathInput').value = downloadPath;
+        } catch (e) {}
+      });
+      el('openDownloadDirBtn').addEventListener('click', async () => {
+        const p = String(el('downloadPathInput').value || '').trim() || 'D:\\Videos';
+        downloadPath = p;
+        try {
+          await fetch('/api/open-folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p }) });
+          await openDirPanel(p);
+        } catch (e) {
+          await openDirPanel(p);
+        }
+      });
+      el('openedDirPanelClose').addEventListener('click', () => el('openedDirPanel').classList.add('hidden'));
+      el('downloadInfoClose').addEventListener('click', () => closeDownloadInfoModal());
+      el('downloadInfoOk').addEventListener('click', () => closeDownloadInfoModal());
+      el('taskProgressClose').addEventListener('click', () => closeTaskProgressModal());
+      el('taskProgressOk').addEventListener('click', () => closeTaskProgressModal());
+      el('toastClose').addEventListener('click', () => hideOverlay('toastOverlay'));
+
+      el('taskStatusTabs').addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-status]');
+        if (!btn) return;
+        setActiveStatusFilter(btn.getAttribute('data-status'));
+        tick();
+      });
+      el('taskPagePrevBtn').addEventListener('click', () => {
+        if (currentTasksPage <= 1) return;
+        currentTasksPage -= 1;
+        refreshTasks({ force: true, page: currentTasksPage }).catch(() => {});
+      });
+      el('taskPageNextBtn').addEventListener('click', () => {
+        if (currentTasksPage >= currentTasksTotalPages) return;
+        currentTasksPage += 1;
+        refreshTasks({ force: true, page: currentTasksPage }).catch(() => {});
+      });
+
+      el('concurrencyOverlay').addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-concurrency-key]');
+        if (!btn) return;
+        const key = btn.getAttribute('data-concurrency-key');
+        const step = Number(btn.getAttribute('data-concurrency-step') || '0');
+        if (!key || !Number.isFinite(step)) return;
+        const next = Math.max(0, Number(concurrencyCfg[key] || 0) + step);
+        concurrencyCfg[key] = next;
+        if (key === 'download') el('concurrencyDownloadVal').textContent = String(next);
+        if (key === 'transcode') el('concurrencyTranscodeVal').textContent = String(next);
+        if (key === 'asr') el('concurrencyAsrVal').textContent = String(next);
+        if (key === 'subtitle') el('concurrencySubtitleVal').textContent = String(next);
+        if (key === 'analysis') el('concurrencyAnalysisVal').textContent = String(next);
+      });
+
+      el('modeManualBtn').addEventListener('click', () => { executionMode = 'manual'; renderConcurrencyValues(); });
+      el('modeAutoBtn').addEventListener('click', () => { executionMode = 'auto'; renderConcurrencyValues(); });
+
+      el('resetDbBtn').addEventListener('click', async () => {
+        if (!confirm('确定要清空本地数据库并从服务端重新拉取数据吗？\n此操作不可撤销，所有本地任务记录将被删除。')) return;
+        closeConcurrencyModal();
+        try {
+          const res = await fetch('/api/reset-db', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+          const j = await res.json().catch(() => ({}));
+          const ok = !!j.ok && res.ok;
+          showToast(ok, ok ? (j.message || '数据库已清空并重新拉取') : (j.message || '操作失败'));
+          if (ok) {
+            autoPickedStatus = false;
+            latestTasks = [];
+            currentTasksPage = 1;
+            await refreshTasks({ force: true, page: 1 });
+            await tick();
+          }
+        } catch (e) {
+          showToast(false, '操作失败');
+        }
+      });
+
+      el('concurrencySave').addEventListener('click', async () => {
+        try {
+          downloadPath = String(el('downloadPathInput').value || '').trim() || 'D:\\Videos';
+          speechModel = String(el('speechModelSelect').value || 'medium').trim() || 'medium';
+          enableStreamProxy = !!el('enableStreamProxyInput').checked;
+          publicBaseUrl = String(el('publicBaseUrlInput').value || '').trim();
+          publicHost = String(el('publicHostInput').value || '').trim();
+          publicPort = String(el('publicPortInput').value || '').trim();
+          publicScheme = String(el('publicSchemeSelect').value || '').trim();
+          const body = JSON.stringify({ ...concurrencyCfg, downloadPath, speechModel, executionMode, enableStreamProxy, publicBaseUrl, publicHost, publicPort, publicScheme });
+          const res = await fetch('/api/concurrency', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+          const j = await res.json().catch(() => ({}));
+          const ok = !!j.ok && res.ok;
+          if (!ok) {
+            showToast(false, j.message || '保存设置失败');
+            return;
+          }
+          closeConcurrencyModal();
+          showToast(true, '设置成功');
+        } catch (e) {
+          showToast(false, '保存设置失败');
+        }
+      });
+
+      el('taskTypeFilters').addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-filter-type]');
+        if (!btn) return;
+        setActiveTypeFilter(btn.getAttribute('data-filter-type'));
+      });
+
+      el('statusRunningCard').addEventListener('click', () => { setActiveStatusFilter('running'); tick(); });
+      el('statusPendingCard').addEventListener('click', () => { setActiveStatusFilter('pending'); tick(); });
+      el('statusCompletedCard').addEventListener('click', () => { setActiveStatusFilter('completed'); tick(); });
+      el('statusErrorCard').addEventListener('click', () => { setActiveStatusFilter('error'); tick(); });
+
+      el('taskRows').addEventListener('click', async (e) => {
+        const idBtn = e.target.closest('button[data-role="idBtn"]');
+        if (idBtn) {
+          const row = idBtn.closest('[data-role="row"]');
+          const taskId = row ? row.dataset.taskId : '';
+          renderTaskProgress(taskId);
+          return;
+        }
+        const iconBox = e.target.closest('[data-role="iconBox"]');
+        if (iconBox) {
+          const row = iconBox.closest('[data-role="row"]');
+          const taskId = row ? row.dataset.taskId : '';
+          const t = taskId ? taskIndex.get(taskId) : null;
+          if (t && t.type === 'download' && t.downloadMeta) openDownloadInfoModal(t.downloadMeta);
+          return;
+        }
+        const btn = e.target.closest('button[data-action]');
+        if (!btn) return;
+        const row = btn.closest('[data-role="row"]');
+        if (!row) return;
+        const taskId = row.dataset.taskId;
+        const action = btn.getAttribute('data-action');
+        if (!taskId || !action) return;
+        const connected = !!String(currentMeta.serverAddress || '').trim();
+        const addr = String(currentMeta.serverAddress || '').trim().toLowerCase();
+        const useMock = !connected || addr === 'mock' || addr.startsWith('mock://');
+        if (useMock) {
+          showToast(false, '请先连接服务器');
+          return;
+        }
+        if (action === 'open-folder') {
+          await openTaskFolder(taskId);
+          return;
+        }
+        if (action === 'open-transcode-folder') {
+          await openTaskFolder(taskId);
+          return;
+        }
+        if (action === 'play-video') {
+          openVideoPlayer(taskId);
+          return;
+        }
+        if (action === 'view-speech-report') {
+          const t = taskId ? taskIndex.get(taskId) : null;
+          const serverId = String(t && t.serverTaskId ? t.serverTaskId : String(taskId || '').split('-')[0]);
+          window.open('/api/speech-report/' + encodeURIComponent(serverId), '_blank');
+          return;
+        }
+        if (action === 'view-analysis-report') {
+          const t = taskId ? taskIndex.get(taskId) : null;
+          const serverId = String(t && t.serverTaskId ? t.serverTaskId : String(taskId || '').split('-')[0]);
+          window.open('/api/analysis-report/' + encodeURIComponent(serverId), '_blank');
+          return;
+        }
+        if (action === 'stop') {
+          openStopConfirmModal(taskId);
+          return;
+        }
+        if (action === 'rerun') {
+          openRerunConfirmModal(taskId);
+          return;
+        }
+        if (action === 'reprocess') {
+          openReprocessConfirmModal(taskId);
+          return;
+        }
+        await performTaskAction(action, taskId);
+      });
+
+      el('testConnBtn').addEventListener('click', async () => {
+        const addr = el('serverAddrInput').value.trim();
+        const serverId = el('serverIdInput').value.trim();
+        const code = el('campusCodeInput').value.trim();
+        if (!addr || !serverId || !code) {
+          showToast(false, '连接失败！');
+          return;
+        }
+        try {
+          const res = await fetch('/api/test-connection', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ serverAddress: addr, serverId, campusCode: code })
+          });
+          const j = await res.json().catch(() => ({}));
+          const ok = !!j.ok && res.ok;
+          showToast(ok, ok ? '连接服务器成功！' : '连接失败！');
+        } catch (e) {
+          showToast(false, '连接失败！');
+        }
+      });
+
+      el('connectOkBtn').addEventListener('click', async () => {
+        const name = el('connNameInput').value.trim();
+        const addr = el('serverAddrInput').value.trim();
+        const code = el('campusCodeInput').value.trim();
+        const serverId = el('serverIdInput').value.trim();
+        const startDate = el('startDateInput').value.trim();
+        if (!addr || !serverId || !code) {
+          showToast(false, '连接失败！');
+          return;
+        }
+        try {
+          const res = await fetch('/api/connect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ connectionName: name, serverAddress: addr, campusCode: code, serverId, startDate })
+          });
+          if (!res.ok) {
+            showToast(false, '连接失败！');
+            return;
+          }
+          closeConnectModal();
+          await fetchMeta();
+          await refreshTasks();
+          showToast(true, '连接服务器成功！');
+          autoPickedStatus = false;
+          await tick();
+        } catch (e) {}
+      });
+
+      tickMetrics();
+      fetchLocalIp();
+      setActiveTypeFilter(filterType);
+      setActiveStatusFilter('running', { skipRefresh: true });
+      fetchMeta().then(async () => { tick(); refreshTasks(); });
+      setInterval(() => { tickMetrics(); }, 1000);
+      setInterval(() => { tick(); }, 1000);
+      setInterval(() => { refreshTasks(); }, 20000);
+    </script>
+  </body>
+</html>
+
