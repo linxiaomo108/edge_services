@@ -2075,13 +2075,17 @@ def _copy_video_audio_content_late_repair_part(
     raw_audio_duration = float(source_metrics.get("audio_duration") or 0.0)
     raw_format_duration = float(source_metrics.get("format_duration") or 0.0)
     raw_authoritative_duration = float(source_metrics.get("authoritative_duration") or 0.0)
+    expected_tail_silence_source = _is_expected_tail_silence_source(source_metrics, precise_state)
     trim_sec = float(precise_state.get("audio_late_trim") or 0.0)
-    if raw_video_duration <= 0.0 or raw_audio_duration <= 0.0:
+    if raw_video_duration <= 0.0:
+        return f"missing_duration:video={raw_video_duration:.3f}:audio={raw_audio_duration:.3f}"
+    if raw_audio_duration <= 0.0 and not expected_tail_silence_source:
         return f"missing_duration:video={raw_video_duration:.3f}:audio={raw_audio_duration:.3f}"
     # 只处理停电/中断类的异常长时间轴：raw 容器声画时长被拉到几十分钟/数小时，
     # 但实际 copy 出来的视频能落到正常短段时长。普通 audio_content_late 仍走原 010。
     abnormal_long_timeline = bool(
-        raw_audio_duration > raw_video_duration + 60.0
+        expected_tail_silence_source
+        or raw_audio_duration > raw_video_duration + 60.0
         or raw_format_duration > raw_video_duration + 60.0
         or raw_authoritative_duration > raw_video_duration + 60.0
     )
@@ -2156,7 +2160,10 @@ def _copy_video_audio_content_late_repair_part(
         return "video_zero_missing_duration"
     if video_zero_start > DOWNLOAD_PART_REBUILD_START_GAP_TOLERANCE_SECONDS:
         return f"video_zero_start_not_zero:{video_zero_start:.3f}"
-    if video_zero_duration >= min(raw_audio_duration, raw_format_duration or raw_audio_duration) - 60.0:
+    if expected_tail_silence_source:
+        if video_zero_duration >= raw_video_duration - 60.0:
+            return f"video_zero_not_shortened_enough:{video_zero_duration:.3f}:raw_video={raw_video_duration:.3f}"
+    elif video_zero_duration >= min(raw_audio_duration, raw_format_duration or raw_audio_duration) - 60.0:
         return f"video_zero_still_abnormal_long:{video_zero_duration:.3f}"
 
     trim_start = trim_sec if classification in {"timestamp_only_audio_late", "duration_delta_audio_late"} else 0.0
@@ -2960,6 +2967,7 @@ def _normalize_download_part(
             cancel_check=cancel_check,
             user_status="正在完整重建当前分段",
             log_context=f"input={rebuild_input_context} media_start={media_start:.3f}s video={video_start:.3f}s audio={audio_start:.3f}s max_start={max_start:.3f}s start_gap={start_gap:.3f}s stream_gap={stream_gap:.3f}s reason={precise_reason or 'absolute_start'} classification={precise_classification or 'unknown'} absolute_start_abnormal={absolute_start_abnormal}",
+            allow_missing_audio_timing=source_has_no_audio_stream and rebuild_input_path == part_path,
         )
         if not rebuilt:
             log.warning(
@@ -2984,6 +2992,7 @@ def _normalize_download_part(
                 cancel_check=cancel_check,
                 user_status="正在全量重建当前分段",
                 log_context=f"full_rebuild_fallback input={rebuild_input_context} media_start={media_start:.3f}s video={video_start:.3f}s audio={audio_start:.3f}s max_start={max_start:.3f}s start_gap={start_gap:.3f}s stream_gap={stream_gap:.3f}s reason={precise_reason or 'absolute_start'} classification={precise_classification or 'unknown'} absolute_start_abnormal={absolute_start_abnormal}",
+                allow_missing_audio_timing=source_has_no_audio_stream and rebuild_input_path == part_path,
             )
         if not rebuilt:
             raise RuntimeError(f"download_part_normalize_failed:{CAM_DL_NORM_010}:{part_path.name}:strong_abnormal_timeline")
@@ -7336,6 +7345,7 @@ def _concat_parts(parts: list[Path], out_path: Path, *, force_canonical_merge: b
         return ok, stage_name, output
 
     ts_parts: list[Path] = []
+    ts_fallback_target_audio_info = _target_concat_audio_info([probe_audio_stream_info(str(p)) for p in concat_input_parts]) if concat_input_parts else {}
     for idx, p in enumerate(concat_input_parts, start=1):
         ts = ts_dir / f"part{idx:03d}.ts"
         temp_files.append(ts)
@@ -7351,6 +7361,72 @@ def _concat_parts(parts: list[Path], out_path: Path, *, force_canonical_merge: b
             video_bsf_args = ["-bsf:v", "h264_mp4toannexb"]
         elif video_codec in {"hevc", "h265"}:
             video_bsf_args = ["-bsf:v", "hevc_mp4toannexb"]
+        if _source_part_has_no_audio_stream(p):
+            duration_sec = float(probe_authoritative_duration_seconds(str(p)) or probe_duration_seconds(str(p)) or 0.0)
+            if duration_sec <= 0.0:
+                raise RuntimeError(f"merge_ts_silent_audio_missing_duration:part{idx}")
+            sample_rate = int(ts_fallback_target_audio_info.get("sample_rate") or 16000)
+            channels = int(ts_fallback_target_audio_info.get("channels") or 1)
+            layout = "stereo" if channels >= 2 else "mono"
+            silent_audio_info = dict(ts_fallback_target_audio_info or {})
+            silent_audio_candidates = [_audio_aac_args(silent_audio_info, bitrate) for bitrate in _audio_bitrate_candidates(silent_audio_info)]
+            silence_prefix = [
+                _ffmpeg_bin(), "-y",
+                "-fflags", "+genpts",
+                "-i", str(p),
+                "-f", "lavfi", "-t", f"{duration_sec:.3f}",
+                "-i", f"anullsrc=channel_layout={layout}:sample_rate={sample_rate}",
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-avoid_negative_ts", "make_zero",
+                "-c:v", "copy",
+            ]
+            silence_suffix = [
+                *video_bsf_args,
+                "-shortest",
+                "-f", "mpegts",
+                str(ts),
+            ]
+            log.warning(
+                "%s ts fallback part %s source audio unavailable, injecting silent AAC track src=%s out=%s target=%s/%s/%s",
+                _branch_code_tag(CAM_MRG_040),
+                idx,
+                str(p),
+                str(ts),
+                str(ts_fallback_target_audio_info.get('codec_name') or 'aac'),
+                sample_rate,
+                channels,
+            )
+            ok, failed_cmd, failed_output, failed_code = _run_with_audio_candidates(
+                silence_prefix,
+                silence_suffix,
+                silent_audio_candidates,
+                f"{_branch_code_tag(CAM_MRG_040)} ts fallback part {idx} silent-audio",
+            )
+            if not ok:
+                if _looks_like_disk_full_text(failed_output):
+                    raise RuntimeError("merge_disk_full")
+                log.warning(
+                    "%s ts fallback part %s silent audio injection failed out=%s exit=%s cmd=%s ffmpeg_tail=%s",
+                    _branch_code_tag(CAM_MRG_040),
+                    idx,
+                    str(ts),
+                    failed_code,
+                    " ".join(failed_cmd),
+                    failed_output[-1200:],
+                )
+                raise RuntimeError(f"merge_ts_silent_audio_failed:part{idx}")
+            if not ts.exists() or ts.stat().st_size <= 0:
+                raise RuntimeError(f"merge_ts_silent_audio_missing:part{idx}")
+            log.info(
+                "%s ts fallback part accepted idx=%s src=%s out=%s size=%s mode=silent_audio_injected",
+                _branch_code_tag(CAM_MRG_040),
+                idx,
+                str(p),
+                str(ts),
+                int(ts.stat().st_size),
+            )
+            ts_parts.append(ts)
+            continue
         ts_prefix = [
             _ffmpeg_bin(), "-y",
             "-fflags", "+genpts",

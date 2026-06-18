@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -14,7 +13,7 @@ from scripts.verify_task_7904_official_flow import main as official_flow_main  #
 def main() -> int:
     src_dir = ROOT / "id=7449"
     work_dir = ROOT / "id=7449_official_flow_out"
-    log_file = work_dir / f"verify_task_7449_official_flow.{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+    log_file = work_dir / "verify_task_7449_official_flow.latest.log"
     defaults = [
         "--src-dir",
         str(src_dir),

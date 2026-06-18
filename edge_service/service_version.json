@@ -1,8 +1,8 @@
 {
-  "version": "2026.06.17.1658.d4179cb",
-  "clientVersion": "2026.06.17.1658.d4179cb",
-  "buildTime": "2026-06-17T16:58:19.325513",
-  "gitCommit": "d4179cb43f64",
+  "version": "2026.06.17.1920.780d00a",
+  "clientVersion": "2026.06.17.1920.780d00a",
+  "buildTime": "2026-06-17T19:20:19.301243",
+  "gitCommit": "780d00a7ea2d",
   "gitBranch": "main",
   "dirty": true,
   "packageMode": "lite",
@@ -20,8 +20,8 @@
   },
   "components": {
     "core": {
-      "version": "2026.06.17.1658.d4179cb",
-      "hash": "7d17de0b6e39f44f"
+      "version": "2026.06.17.1920.780d00a",
+      "hash": "a4550b88ab813a8d"
     },
     "sdk": {
       "version": "6.1.9.4",

@@ -26,36 +26,38 @@ from hik_sdk_standalone import close_download_session, download_by_time_with_ses
 # 运行模式：
 #   "online" = 在线连接 NVR 下载指定时间段，再执行声画同步实验。
 #   "local"  = 读取本地已有源分段，只执行修复、转封装、合并实验。
-LAB_MODE = "online"
+LAB_MODE = "local"
 
 # 在线模式参数：需要临时验证下载时，优先改这里。
-ONLINE_DEVICE_IP = ""
-ONLINE_DEVICE_PORT = 8000
-ONLINE_USERNAME = "admin"
-ONLINE_PASSWORD = ""
-ONLINE_WEB_CHANNEL = 1
-ONLINE_START_TIME = "2026-06-06 15:20:00"
-ONLINE_END_TIME = "2026-06-06 18:10:00"
-ONLINE_SEGMENT_MINUTES = 30
-ONLINE_LOCKED_SDK_CHANNEL = 0
-ONLINE_LOCKED_RECORD_TYPE = ""  # 例如 "0xff"；为空表示自动尝试。
-ONLINE_SDK_PROBE_SECONDS = 6
-ONLINE_DOWNLOAD_STALL_TIMEOUT_SEC = 180
+ONLINE_DEVICE_IP = "117.144.207.90"  # NVR 设备地址；可以是内网 IP，也可以是公网/专线映射后的 IP。
+ONLINE_DEVICE_PORT = 18081  # NVR SDK 登录端口；对应海康设备的服务端口，通常内网是 8000，映射后填映射端口，不是视频通道号。
+ONLINE_USERNAME = "admin"  # NVR 登录账号；用于海康 SDK 登录设备。
+ONLINE_PASSWORD = "wlyn6688"  # NVR 登录密码；用于海康 SDK 登录设备。
+ONLINE_WEB_CHANNEL = 1  # 业务/网页通道号；表示要下载哪个摄像头通道，例如 NVR 回放页面显示的“通道号: 1”。
+ONLINE_START_TIME = "2026-06-13 08:30:00"  # 下载开始时间；格式为 YYYY-MM-DD HH:MM:SS，按 NVR 本地时间理解。
+ONLINE_END_TIME = "2026-06-13 09:30:00"  # 下载结束时间；格式为 YYYY-MM-DD HH:MM:SS，必须晚于开始时间。
+ONLINE_SEGMENT_MINUTES = 30  # 实验脚本切分下载的分钟数；08:30~09:30 且填 30 时，会下载 2 个 30 分钟分段。
+ONLINE_LOCKED_SDK_CHANNEL = 33  # 固定使用的海康 SDK 通道号；这是摄像头通道，不是 NVR 端口。已确认映射关系时可填写，避免反复探测。
+ONLINE_LOCKED_RECORD_TYPE = ""  # 固定录像类型；例如 "0xff"。为空表示按脚本/SDK逻辑自动尝试常见录像类型。
+ONLINE_SDK_PROBE_SECONDS = 6  # 通道探测时每个候选下载观察的秒数；仅在未锁定或需要探测通道时使用。
+ONLINE_DOWNLOAD_STALL_TIMEOUT_SEC = 180  # 下载卡住判定秒数；超过该时长没有进度则认为本段下载异常。
 
 # 本地模式参数：已有源分段验证时，改这里。
-LOCAL_EXISTING_RAW_DIR = ""
+LOCAL_EXISTING_RAW_DIR = r"E:\Videos\2026-06-06\nj"
 LOCAL_RAW_GLOB = "*.mp4"
 LOCAL_EXISTING_START_TIME = "2026-06-06 15:20:00"
-LOCAL_SOURCE_LINK_MODE = "hardlink"  # hardlink 或 copy
+LOCAL_SOURCE_LINK_MODE = "copy"  # hardlink 或 copy
 
 # 实验输出和依赖目录。当前先保留 sdk/Dll 的重复文件，实验稳定后再做去重。
 DEFAULT_OUTPUT_DIR = ""
 DEFAULT_DOWNLOAD_SDK_DIR = str(Path(__file__).resolve().parent / "sdk" / "download")
 DEFAULT_CONVERT_DLL_DIR = str(Path(__file__).resolve().parent / "Dll")
 DEFAULT_CONVERSION_MODE = "format"
-DEFAULT_FORMAT_VARIANT = "both"
-DEFAULT_MERGE_MODE = "all"
-DEFAULT_ANALYZE_DATA = True
+# 默认走浏览器轻量验证：只生成一套时间戳重置结果，并用 ffmpeg concat 做一次浏览器可播合并。
+DEFAULT_FORMAT_VARIANT = "reset"
+DEFAULT_MERGE_MODE = "ffmpeg_duration"
+DEFAULT_MERGE_FASTSTART = False
+DEFAULT_ANALYZE_DATA = False
 
 LOG = logging.getLogger("hik_avsync_lab")
 MERGE_READY_STREAM_GAP_MAX_SEC = float(os.getenv("HIK_LAB_MERGE_READY_STREAM_GAP_MAX_SEC", "0.5"))
@@ -474,6 +476,8 @@ class FormatConversionClient:
 
         started = False
         last_progress = 0.0
+        started_at = time.monotonic()
+        progress_ratio = 0.0
         try:
             ret = int(self.dll.FC_RegisterDetailedCB(handle, frame_cb, None))
             if ret != 0:
@@ -522,7 +526,12 @@ class FormatConversionClient:
                 if ret != 0:
                     LOG.warning("FC_GetProgress ret=%s input=%s", ret, input_path)
                 last_progress = float(progress.value)
-                if last_progress >= 100.0:
+                # Some FormatConversion builds report progress as 0.0~1.0,
+                # others as 0~100. Normalize both forms so we can stop as soon
+                # as conversion is genuinely complete.
+                progress_ratio = last_progress / 100.0 if last_progress > 1.0 else last_progress
+                if progress_ratio >= 0.999:
+                    completed_by = "progress_done"
                     break
                 current_size = output_path.stat().st_size if output_path.exists() else 0
                 if current_size > 0 and current_size == last_size:
@@ -544,12 +553,37 @@ class FormatConversionClient:
                         break
                     raise TimeoutError(f"FormatConversion timeout progress={last_progress:.2f} input={input_path}")
                 time.sleep(0.3)
+            if started:
+                try:
+                    self.dll.FC_Stop(handle)
+                    started = False
+                except Exception:
+                    pass
+            # FC reports completion slightly before the target file is fully
+            # finalized on disk. Give it a short settle window so a valid output
+            # is not misclassified as missing.
+            settle_deadline = time.monotonic() + 15.0
+            while time.monotonic() < settle_deadline:
+                if output_path.exists() and output_path.stat().st_size > 0:
+                    break
+                time.sleep(0.2)
             if not output_path.exists() or output_path.stat().st_size <= 0:
                 raise RuntimeError(f"FormatConversion output missing or empty: {output_path}")
             if frame_log_path is not None:
                 frame_log_path.parent.mkdir(parents=True, exist_ok=True)
                 frame_log_path.write_text(json.dumps(frame_log, ensure_ascii=False, indent=2), encoding="utf-8")
-            return {"ok": True, "progress": last_progress, "completed_by": completed_by, "frame_log_entries": len(frame_log), "get_file_info_ret": get_info_ret, "source_info": self.media_info_to_dict(source_info), "set_target_ret": set_target_ret, "target_info": target_info_dict}
+            return {
+                "ok": True,
+                "progress": last_progress,
+                "progress_ratio": progress_ratio,
+                "completed_by": completed_by,
+                "elapsed_sec": time.monotonic() - started_at,
+                "frame_log_entries": len(frame_log),
+                "get_file_info_ret": get_info_ret,
+                "source_info": self.media_info_to_dict(source_info),
+                "set_target_ret": set_target_ret,
+                "target_info": target_info_dict,
+            }
         finally:
             if started:
                 try:
@@ -1314,6 +1348,139 @@ def validate_segments_before_merge(paths: list[Path]) -> dict[str, Any]:
     return {"ok": not incompatible, "reference": ref, "incompatible": incompatible, "metas": metas}
 
 
+def build_silent_audio_variant(
+    input_path: Path,
+    output_path: Path,
+    *,
+    sample_rate: int,
+    channels: int,
+    bit_rate: str = "64k",
+    timeout_sec: float = 1800.0,
+) -> dict[str, Any]:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        output_path.unlink()
+    channel_layout = "mono" if channels <= 1 else "stereo"
+    cmd = [
+        ffmpeg_bin(), "-y",
+        "-i", str(input_path),
+        "-f", "lavfi",
+        "-i", f"anullsrc=r={sample_rate}:cl={channel_layout}",
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", bit_rate,
+        "-ar", str(sample_rate),
+        "-ac", str(channels),
+        "-shortest",
+        str(output_path),
+    ]
+    started = time.monotonic()
+    run_command(cmd, timeout_sec=timeout_sec)
+    return {
+        "ok": True,
+        "output": str(output_path),
+        "elapsed_sec": time.monotonic() - started,
+        "probe": probe_media(output_path),
+        "method": "silent_audio_fill",
+    }
+
+
+def build_padded_audio_variant(
+    input_path: Path,
+    output_path: Path,
+    *,
+    sample_rate: int,
+    channels: int,
+    bit_rate: str = "64k",
+    timeout_sec: float = 1800.0,
+) -> dict[str, Any]:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        output_path.unlink()
+    cmd = [
+        ffmpeg_bin(), "-y",
+        "-i", str(input_path),
+        "-map", "0:v:0",
+        "-map", "0:a:0",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", bit_rate,
+        "-ar", str(sample_rate),
+        "-ac", str(channels),
+        "-af", "apad",
+        "-shortest",
+        str(output_path),
+    ]
+    started = time.monotonic()
+    run_command(cmd, timeout_sec=timeout_sec)
+    return {
+        "ok": True,
+        "output": str(output_path),
+        "elapsed_sec": time.monotonic() - started,
+        "probe": probe_media(output_path),
+        "method": "audio_tail_silence_fill",
+    }
+
+
+def prepare_paths_for_merge(paths: list[Path], output_path: Path) -> dict[str, Any]:
+    existing = [p for p in paths if p.exists() and p.stat().st_size > 0]
+    probes = {p: probe_media(p) for p in existing}
+    metas = [{"path": p, **probe_segment_meta(p)} for p in existing]
+    audio_present = [item for item in metas if item.get("audio_codec")]
+    audio_missing = [item for item in metas if not item.get("audio_codec")]
+    audio_tail_short: set[Path] = set()
+    for p, probe in probes.items():
+        video = probe.get("video") or {}
+        audio = probe.get("audio") or {}
+        if not video or not audio:
+            continue
+        video_duration = float(video.get("duration") or probe.get("format_duration") or 0.0)
+        audio_duration = float(audio.get("duration") or 0.0)
+        if video_duration > 0 and audio_duration > 0 and video_duration - audio_duration > 1.0:
+            audio_tail_short.add(p)
+    if not audio_missing and not audio_tail_short:
+        return {"paths": existing, "prepared": [], "metas": metas}
+
+    ref = audio_present[0]
+    sample_rate = int(ref.get("sample_rate") or 32000)
+    prepared_dir = output_path.parent / "_prepared_for_merge"
+    prepared_paths: list[Path] = []
+    prepared_items: list[dict[str, Any]] = []
+    for item in metas:
+        src = Path(item["path"])
+        if item.get("audio_codec") and src not in audio_tail_short:
+            prepared_paths.append(src)
+            continue
+        if item.get("audio_codec"):
+            probe = probes.get(src) or {}
+            audio = probe.get("audio") or {}
+            prepared_path = prepared_dir / f"{src.stem}.audio_tail_silence.mp4"
+            prepared = build_padded_audio_variant(
+                src,
+                prepared_path,
+                sample_rate=int(audio.get("sample_rate") or sample_rate),
+                channels=int(audio.get("channels") or 1),
+            )
+        else:
+            prepared_path = prepared_dir / f"{src.stem}.with_silence.mp4"
+            prepared = build_silent_audio_variant(
+                src,
+                prepared_path,
+                sample_rate=sample_rate,
+                channels=1,
+            )
+        prepared_paths.append(prepared_path)
+        prepared_items.append({
+            "source": str(src),
+            "prepared": str(prepared_path),
+            "sample_rate": sample_rate,
+            **prepared,
+        })
+    return {"paths": prepared_paths, "prepared": prepared_items, "metas": metas}
+
+
 def segment_duration_for_concat(path: Path) -> float:
     probe = probe_media(path)
     video = probe.get("video") or {}
@@ -1333,13 +1500,110 @@ def write_concat_file_with_durations(paths: list[Path], concat_file: Path, durat
     concat_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def merge_with_ffmpeg_duration(paths: list[Path], output_path: Path, durations_sec: list[float] | None = None) -> dict[str, Any]:
+def video_bsf_args_for(path: Path) -> list[str]:
+    codec = str((probe_media(path).get("video") or {}).get("codec") or "").lower()
+    if codec == "h264":
+        return ["-bsf:v", "h264_mp4toannexb"]
+    if codec in {"hevc", "h265"}:
+        return ["-bsf:v", "hevc_mp4toannexb"]
+    return []
+
+
+def merge_with_ts_bridge(
+    paths: list[Path],
+    output_path: Path,
+    *,
+    prepared_inputs: list[dict[str, Any]] | None = None,
+    validation: dict[str, Any] | None = None,
+    faststart: bool = False,
+) -> dict[str, Any]:
     existing = [p for p in paths if p.exists() and p.stat().st_size > 0]
+    if not existing:
+        return {"ok": False, "method": "ffmpeg_ts_bridge", "error": "no_input_files"}
+    ts_dir = output_path.parent / "_ts_bridge"
+    ts_dir.mkdir(parents=True, exist_ok=True)
+    ts_paths: list[Path] = []
+    started = time.monotonic()
+    try:
+        for idx, part in enumerate(existing, start=1):
+            ts_path = ts_dir / f"part{idx:03d}.ts"
+            if ts_path.exists():
+                ts_path.unlink()
+            cmd = [
+                ffmpeg_bin(), "-y",
+                "-fflags", "+genpts",
+                "-i", str(part),
+                "-map", "0:v:0",
+                "-map", "0:a:0?",
+                "-c", "copy",
+                "-avoid_negative_ts", "make_zero",
+                *video_bsf_args_for(part),
+                "-f", "mpegts",
+                str(ts_path),
+            ]
+            run_command(cmd)
+            if not ts_path.exists() or ts_path.stat().st_size <= 0:
+                raise RuntimeError(f"ts_bridge_part_missing:{idx}")
+            ts_paths.append(ts_path)
+        concat_arg = "concat:" + "|".join(str(p) for p in ts_paths)
+        cmd = [
+            ffmpeg_bin(), "-y",
+            "-fflags", "+genpts",
+            "-i", concat_arg,
+            "-map", "0:v:0",
+            "-map", "0:a:0?",
+            "-c", "copy",
+            "-bsf:a", "aac_adtstoasc",
+            "-avoid_negative_ts", "make_zero",
+        ]
+        if faststart:
+            cmd.extend(["-movflags", "+faststart"])
+        cmd.append(str(output_path))
+        run_command(cmd)
+        return {
+            "ok": True,
+            "method": "ffmpeg_ts_bridge",
+            "output": str(output_path),
+            "elapsed_sec": time.monotonic() - started,
+            "faststart": faststart,
+            "prepared_inputs": prepared_inputs or [],
+            "validation": validation or validate_segments_before_merge(existing),
+            "ts_parts": [str(p) for p in ts_paths],
+            "probe": probe_media(output_path),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "method": "ffmpeg_ts_bridge",
+            "output": str(output_path),
+            "elapsed_sec": time.monotonic() - started,
+            "faststart": faststart,
+            "prepared_inputs": prepared_inputs or [],
+            "validation": validation or {},
+            "ts_parts": [str(p) for p in ts_paths],
+            "error": str(exc),
+        }
+
+
+def merge_with_ffmpeg_duration(
+    paths: list[Path],
+    output_path: Path,
+    durations_sec: list[float] | None = None,
+    faststart: bool = False,
+) -> dict[str, Any]:
+    prepared = prepare_paths_for_merge(paths, output_path)
+    existing = [p for p in (prepared.get("paths") or []) if p.exists() and p.stat().st_size > 0]
     if not existing:
         return {"ok": False, "method": "ffmpeg_concat_duration", "error": "no_input_files"}
     validation = validate_segments_before_merge(existing)
     if not validation.get("ok"):
-        return {"ok": False, "method": "ffmpeg_concat_duration", "error": "incompatible_segments", "validation": validation}
+        return {
+            "ok": False,
+            "method": "ffmpeg_concat_duration",
+            "error": "incompatible_segments",
+            "validation": validation,
+            "prepared_inputs": prepared.get("prepared") or [],
+        }
     pts_gaps = [
         {
             "path": str(p),
@@ -1350,15 +1614,97 @@ def merge_with_ffmpeg_duration(paths: list[Path], output_path: Path, durations_s
     ]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     concat_file = output_path.with_suffix(".concat.txt")
-    write_concat_file_with_durations(existing, concat_file, durations_sec)
+    concat_durations = bool(durations_sec)
+    if concat_durations:
+        write_concat_file_with_durations(existing, concat_file, durations_sec)
+    else:
+        write_concat_file(existing, concat_file)
+    ref_meta = (validation.get("reference") or {})
+    audio_codec = str(ref_meta.get("audio_codec") or "").lower()
+    # MP4 cannot mux pcm_alaw by copy. Keep video copy and only normalize the
+    # audio codec at merge time for browser-playable output.
+    needs_audio_reencode = audio_codec in {"pcm_alaw", "pcm_mulaw"}
     try:
-        cmd = [ffmpeg_bin(), "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", str(output_path)]
+        cmd = [ffmpeg_bin(), "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", "-avoid_negative_ts", "make_zero"]
+        if needs_audio_reencode:
+            cmd = [ffmpeg_bin(), "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c:v", "copy", "-c:a", "aac", "-b:a", "64k", "-ar", "8000", "-ac", "1", "-avoid_negative_ts", "make_zero"]
+        if faststart:
+            cmd.extend(["-movflags", "+faststart"])
+        cmd.append(str(output_path))
         started = time.monotonic()
         run_command(cmd)
         elapsed = time.monotonic() - started
-        return {"ok": True, "method": "ffmpeg_concat_duration", "output": str(output_path), "elapsed_sec": elapsed, "validation": validation, "pts_large_gaps": pts_gaps, "probe": probe_media(output_path)}
+        method = "ffmpeg_concat_duration_audio_aac" if needs_audio_reencode else "ffmpeg_concat_duration"
+        probe = probe_media(output_path)
+        ready_issue = merge_ready_issue(probe)
+        if ready_issue:
+            ts_output = output_path.with_suffix(".ts_bridge.mp4")
+            ts_result = merge_with_ts_bridge(
+                existing,
+                ts_output,
+                prepared_inputs=prepared.get("prepared") or [],
+                validation=validation,
+                faststart=faststart,
+            )
+            ts_ready_issue = merge_ready_issue(ts_result.get("probe") or {}) if ts_result.get("ok") else ""
+            if ts_result.get("ok") and not ts_ready_issue:
+                ts_result["mp4_concat_result"] = {
+                    "ok": False,
+                    "method": method,
+                    "output": str(output_path),
+                    "elapsed_sec": elapsed,
+                    "faststart": faststart,
+                    "concat_durations": concat_durations,
+                    "audio_reencoded": needs_audio_reencode,
+                    "probe": probe,
+                    "error": f"merge_ready_invalid:{ready_issue}",
+                }
+                return ts_result
+            if ts_ready_issue:
+                ts_result["ok"] = False
+                ts_result["error"] = f"merge_ready_invalid:{ts_ready_issue}"
+            return {
+                "ok": False,
+                "method": method,
+                "output": str(output_path),
+                "elapsed_sec": elapsed,
+                "faststart": faststart,
+                "concat_durations": concat_durations,
+                "audio_reencoded": needs_audio_reencode,
+                "prepared_inputs": prepared.get("prepared") or [],
+                "validation": validation,
+                "pts_large_gaps": pts_gaps,
+                "probe": probe,
+                "error": f"merge_ready_invalid:{ready_issue}",
+                "ts_bridge_result": ts_result,
+            }
+        return {
+            "ok": True,
+            "method": method,
+            "output": str(output_path),
+            "elapsed_sec": elapsed,
+            "faststart": faststart,
+            "concat_durations": concat_durations,
+            "audio_reencoded": needs_audio_reencode,
+            "prepared_inputs": prepared.get("prepared") or [],
+            "validation": validation,
+            "pts_large_gaps": pts_gaps,
+            "probe": probe,
+        }
     except Exception as exc:
-        return {"ok": False, "method": "ffmpeg_concat_duration", "output": str(output_path), "validation": validation, "pts_large_gaps": pts_gaps, "error": str(exc)}
+        method = "ffmpeg_concat_duration_audio_aac" if needs_audio_reencode else "ffmpeg_concat_duration"
+        return {
+            "ok": False,
+            "method": method,
+            "output": str(output_path),
+            "faststart": faststart,
+            "concat_durations": concat_durations,
+            "audio_reencoded": needs_audio_reencode,
+            "prepared_inputs": prepared.get("prepared") or [],
+            "validation": validation,
+            "pts_large_gaps": pts_gaps,
+            "error": str(exc),
+        }
     finally:
         try:
             concat_file.unlink()
@@ -1452,7 +1798,11 @@ def merge_variant_outputs(args: argparse.Namespace, runtime_dir: Path, results: 
         merger = HikSdkMerger(runtime_dir)
         results_list.append(merger.merge_with_hmmerge(paths, merged_dir / f"{prefix}_hmmerge.mp4"))
         results_list.append(merger.merge_with_fileedit(paths, merged_dir / f"{prefix}_fileedit.mp4"))
-    merge_result = merge_with_ffmpeg_duration(paths, merged_dir / f"{prefix}_ffmpeg_duration.mp4")
+    merge_result = merge_with_ffmpeg_duration(
+        paths,
+        merged_dir / f"{prefix}_ffmpeg_duration.mp4",
+        faststart=bool(args.merge_faststart),
+    )
     merge_result["variant"] = variant
     merge_result["conversion_method"] = primary_method
     merge_result["selected_indexes"] = selected_indexes
@@ -1562,6 +1912,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--analyze-data", action="store_true", default=DEFAULT_ANALYZE_DATA)
     parser.add_argument("--analyze-max-packets", type=int, default=200000)
     parser.add_argument("--merge-mode", choices=("ffmpeg_duration", "all", "none"), default=os.getenv("HIK_LAB_MERGE_MODE", DEFAULT_MERGE_MODE))
+    parser.add_argument("--merge-faststart", action="store_true", default=DEFAULT_MERGE_FASTSTART)
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--serve-host", default="127.0.0.1")
     parser.add_argument("--serve-port", type=int, default=18080)

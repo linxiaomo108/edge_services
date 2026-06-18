@@ -767,63 +767,68 @@ def download_by_time_with_session(session: StandaloneDownloadSession, *, start_t
     if int(session.login_uid) not in user_ids:
         user_ids.append(int(session.login_uid))
     for channel in _channel_candidates(session, hint_channel=hint_channel, sdk_channel_offsets=sdk_channel_offsets):
-        if hint_channel is not None and locked_record_type is not None:
-            for uid_candidate in user_ids:
-                main_probe_result, nearby_probe_result = _run_same_channel_probe(
-                    session.sdk,
-                    uid_candidate,
-                    channel,
-                    expanded_start,
-                    expanded_end,
-                    int(locked_record_type),
-                    probe_seconds=max(1, int(probe_seconds or 10)),
-                    probe_attempts=3,
-                    on_probe_status=lambda message: LOG.info(message),
-                )
-                if not main_probe_result.ok:
-                    LOG.info(
-                        "locked same-channel probe failed uid=%s channel=%s record_type=%s status=%s nearby=%s",
+        if hint_channel is not None:
+            # In lab mode, once the SDK channel is explicitly locked, prefer probing/downloading
+            # that exact channel directly. Some mapped/NAT environments can log in successfully
+            # but still make FindFile_V30 unreliable, which would block an otherwise valid
+            # direct playback/download validation.
+            for record_type in _record_type_candidates(session, locked_record_type=locked_record_type):
+                for uid_candidate in user_ids:
+                    main_probe_result, nearby_probe_result = _run_same_channel_probe(
+                        session.sdk,
                         uid_candidate,
                         channel,
-                        locked_record_type,
-                        main_probe_result.status,
-                        nearby_probe_result.status if nearby_probe_result is not None else "",
+                        expanded_start,
+                        expanded_end,
+                        int(record_type),
+                        probe_seconds=max(1, int(probe_seconds or 10)),
+                        probe_attempts=3,
+                        on_probe_status=lambda message: LOG.info(message),
                     )
-                    last_error = str(main_probe_result.status or f"probe_failed:{uid_candidate}:{channel}:{locked_record_type}")
-                    continue
-                LOG.info(
-                    "locked same-channel probe ok uid=%s channel=%s record_type=%s main_status=%s probe_pos=%s probe_size=%s",
-                    uid_candidate,
-                    channel,
-                    locked_record_type,
-                    main_probe_result.status,
-                    main_probe_result.pos,
-                    main_probe_result.size_bytes,
-                )
-                download_windows: list[tuple[str, datetime, datetime]] = [("原始", expanded_start, expanded_end)]
-                if nearby_probe_result is not None and nearby_probe_result.ok:
-                    if nearby_probe_result.window_label == "前30分钟":
-                        download_windows.append((nearby_probe_result.window_label, expanded_start - timedelta(minutes=30), expanded_end - timedelta(minutes=30)))
-                    elif nearby_probe_result.window_label == "后30分钟":
-                        download_windows.append((nearby_probe_result.window_label, expanded_start + timedelta(minutes=30), expanded_end + timedelta(minutes=30)))
-                for window_label, win_start, win_end in download_windows:
-                    ok, error = _download_file(session.sdk, uid_candidate, channel, int(locked_record_type), win_start, win_end, str(output), on_progress, stall_timeout_sec)
-                    LOG.info("locked probed download uid=%s channel=%s record_type=%s window=%s ok=%s error=%s window_range=%s~%s", uid_candidate, channel, locked_record_type, window_label, ok, error, win_start, win_end)
-                    if ok and output.exists() and output.stat().st_size > 0:
-                        session.preferred_sdk_channel = int(channel)
-                        session.preferred_record_type = int(locked_record_type)
-                        session.preferred_download_uid = int(uid_candidate)
-                        return StandaloneDownloadResult(
-                            path=str(output),
-                            size_bytes=output.stat().st_size,
-                            channel_used=int(channel),
-                            record_type=int(locked_record_type),
-                            sdk_port=int(session.sdk_port),
-                            user_id=int(uid_candidate),
-                            actual_duration_sec=max(0.0, (win_end - win_start).total_seconds()),
-                            probe_status=str(main_probe_result.status),
+                    if not main_probe_result.ok:
+                        LOG.info(
+                            "locked same-channel probe failed uid=%s channel=%s record_type=%s status=%s nearby=%s",
+                            uid_candidate,
+                            channel,
+                            record_type,
+                            main_probe_result.status,
+                            nearby_probe_result.status if nearby_probe_result is not None else "",
                         )
-                    last_error = str(error or f"locked_probed_download_failed:{window_label}:{uid_candidate}:{channel}:{locked_record_type}")
+                        last_error = str(main_probe_result.status or f"probe_failed:{uid_candidate}:{channel}:{record_type}")
+                        continue
+                    LOG.info(
+                        "locked same-channel probe ok uid=%s channel=%s record_type=%s main_status=%s probe_pos=%s probe_size=%s",
+                        uid_candidate,
+                        channel,
+                        record_type,
+                        main_probe_result.status,
+                        main_probe_result.pos,
+                        main_probe_result.size_bytes,
+                    )
+                    download_windows: list[tuple[str, datetime, datetime]] = [("原始", expanded_start, expanded_end)]
+                    if nearby_probe_result is not None and nearby_probe_result.ok:
+                        if nearby_probe_result.window_label == "前30分钟":
+                            download_windows.append((nearby_probe_result.window_label, expanded_start - timedelta(minutes=30), expanded_end - timedelta(minutes=30)))
+                        elif nearby_probe_result.window_label == "后30分钟":
+                            download_windows.append((nearby_probe_result.window_label, expanded_start + timedelta(minutes=30), expanded_end + timedelta(minutes=30)))
+                    for window_label, win_start, win_end in download_windows:
+                        ok, error = _download_file(session.sdk, uid_candidate, channel, int(record_type), win_start, win_end, str(output), on_progress, stall_timeout_sec)
+                        LOG.info("locked probed download uid=%s channel=%s record_type=%s window=%s ok=%s error=%s window_range=%s~%s", uid_candidate, channel, record_type, window_label, ok, error, win_start, win_end)
+                        if ok and output.exists() and output.stat().st_size > 0:
+                            session.preferred_sdk_channel = int(channel)
+                            session.preferred_record_type = int(record_type)
+                            session.preferred_download_uid = int(uid_candidate)
+                            return StandaloneDownloadResult(
+                                path=str(output),
+                                size_bytes=output.stat().st_size,
+                                channel_used=int(channel),
+                                record_type=int(record_type),
+                                sdk_port=int(session.sdk_port),
+                                user_id=int(uid_candidate),
+                                actual_duration_sec=max(0.0, (win_end - win_start).total_seconds()),
+                                probe_status=str(main_probe_result.status),
+                            )
+                        last_error = str(error or f"locked_probed_download_failed:{window_label}:{uid_candidate}:{channel}:{record_type}")
             continue
         search = _search_recordings(session.sdk, session.login_uid, channel, start_time, end_time)
         LOG.info("findfile channel=%s result=%s", channel, search)
