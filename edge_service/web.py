@@ -479,7 +479,7 @@ def build_app(cfg: EdgeConfig) -> FastAPI:
             "/api/history/video/play/{session_id}",
             "/api/history/video/close",
             "/api/stream/open",
-            "/api/stream/play/{nvr_device_id}/{channel_num}",
+            "/api/stream/play/session/{session_id}",
             "/api/stream/close",
             "/api/stream/status",
             "/api/mobile-record/classrooms/status",

@@ -7,10 +7,24 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+      .type-filter-indicator {
+        position: absolute;
+        top: 4px;
+        bottom: 4px;
+        left: 4px;
+        width: 0;
+        border-radius: 6px;
+        background: #fff;
+        box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+        transition: transform 220ms ease, width 220ms ease;
+        pointer-events: none;
+      }
+    </style>
   </head>
-  <body class="bg-[#F8FAFC] font-sans overflow-y-auto">
-    <div class="flex flex-col min-h-screen">
-      <div class="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between sticky top-0 z-10 h-[120px]">
+  <body class="bg-[#F8FAFC] font-sans overflow-hidden">
+    <div class="flex flex-col h-screen">
+      <div class="bg-white px-6 py-2 border-b border-slate-200 flex items-center justify-between sticky top-0 z-10 h-[84px]">
         <button id="openConnect" class="flex items-center gap-4 text-left">
           <div class="w-10 h-10 rounded-lg flex items-center justify-center border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 transition-colors">
             <i data-lucide="settings" class="w-5 h-5"></i>
@@ -25,18 +39,18 @@
         </button>
 
         <div class="flex items-center gap-3">
-          <div id="serviceStatus" class="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium bg-slate-100 border-slate-200 text-slate-500">
+          <div id="serviceStatus" class="h-[32px] min-h-[32px] max-h-[32px] box-border flex items-center gap-2 px-3 py-0 rounded-lg border text-sm font-medium leading-none bg-slate-100 border-slate-200 text-slate-500">
             <div id="serviceDot" class="w-2 h-2 rounded-full bg-slate-400 animate-pulse"></div>
             <span id="serviceStatusText">未启动</span>
           </div>
-          <button id="refreshBtn" class="flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-4 py-2 rounded-lg text-[13px] font-medium transition-colors">
+          <button id="refreshBtn" class="h-[32px] min-h-[32px] max-h-[32px] box-border flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-4 py-0 rounded-lg text-[13px] font-medium leading-none transition-colors">
             <i data-lucide="refresh-ccw" class="w-4 h-4"></i>
             同步状态
           </button>
         </div>
       </div>
 
-      <div class="px-[20px] pb-[20px] w-full space-y-[20px]">
+      <div class="px-[20px] pb-[20px] w-full flex-1 min-h-0 overflow-hidden flex flex-col gap-[10px]">
         <div id="openedDirPanel" class="hidden bg-white rounded-xl border border-slate-200 px-6 py-4">
           <div class="flex items-center justify-between gap-4">
             <div class="flex items-center gap-2 text-sm text-slate-700">
@@ -52,9 +66,9 @@
             -
           </div>
         </div>
-        <div class="grid grid-cols-12 gap-[20px] mt-[25px]">
-          <div class="col-span-4 bg-white rounded-xl border border-slate-200 p-6">
-            <div class="flex items-center justify-between gap-2 mb-6 text-slate-800 font-semibold">
+        <div class="grid grid-cols-12 gap-[10px] mt-[10px] h-[180px]">
+          <div class="col-span-4 bg-white rounded-xl border border-slate-200 px-6 py-[14px] h-full overflow-hidden">
+            <div class="flex items-center justify-between gap-2 mb-3 text-slate-800 font-semibold">
               <div class="flex items-center gap-2 min-w-0">
               <i data-lucide="server" class="w-5 h-5 text-violet-600"></i>
                 <span id="campusName" class="truncate">本地校区</span>
@@ -68,32 +82,28 @@
                 </div>
               </div>
             </div>
-            <div class="space-y-4">
-              <div class="flex items-center justify-between text-sm py-1 border-b border-slate-50">
+            <div class="space-y-2">
+              <div class="flex items-center justify-between text-sm py-0.5 border-b border-slate-50">
                 <span class="text-slate-500">内网 IP</span>
                 <span class="font-mono font-medium text-slate-700" id="nodeIp">-</span>
               </div>
-              <div class="flex items-center justify-between text-sm py-1 border-b border-slate-50">
+              <div class="flex items-center justify-between text-sm py-0.5 border-b border-slate-50">
                 <span class="text-slate-500">持续运行</span>
                 <span class="font-mono font-medium text-slate-700" id="uptime">-</span>
               </div>
-              <div class="flex items-center justify-between text-sm py-1 border-b border-slate-50">
-                <span class="text-slate-500">最近拉取</span>
-                <span class="font-mono font-medium text-slate-700" id="lastPollAt">-</span>
-              </div>
-              <div class="flex items-center justify-between text-sm py-1">
+              <div class="flex items-center justify-between text-sm py-0.5">
                 <span class="text-slate-500">最近上报</span>
                 <span class="font-mono font-medium text-slate-700" id="lastReportAt">-</span>
               </div>
             </div>
           </div>
 
-          <div class="col-span-8 bg-white rounded-xl border border-slate-200 p-6">
-            <div class="flex items-center gap-2 mb-8 text-slate-800 font-semibold">
+          <div class="col-span-8 bg-white rounded-xl border border-slate-200 px-6 py-[14px] h-full overflow-hidden">
+            <div class="flex items-center gap-2 mb-4 text-slate-800 font-semibold">
               <i data-lucide="activity" class="w-5 h-5 text-violet-600"></i>
               硬件资源实时占用率
             </div>
-            <div class="grid grid-cols-2 gap-x-12 gap-y-8">
+            <div class="grid grid-cols-2 gap-x-12 gap-y-4">
               <div class="space-y-2">
                 <div class="flex justify-between text-sm">
                   <span class="flex items-center gap-2 text-slate-500"><i data-lucide="cpu" class="w-4 h-4"></i> CPU 使用率</span>
@@ -126,47 +136,47 @@
           </div>
         </div>
 
-        <div class="grid grid-cols-4 gap-[20px]">
-          <div id="statusRunningCard" class="bg-white p-5 rounded-xl border border-slate-200 flex items-center gap-4 cursor-pointer transition-all hover:border-violet-300">
+        <div class="grid grid-cols-4 gap-[10px] h-[80px]">
+          <div id="statusRunningCard" class="bg-white px-5 py-3 h-full overflow-hidden rounded-xl border border-slate-200 flex items-center gap-4 cursor-pointer transition-all hover:border-violet-300">
             <div class="w-12 h-12 rounded-full bg-violet-50 flex items-center justify-center text-violet-600">
               <i data-lucide="play" class="w-6 h-6"></i>
             </div>
             <div>
-              <div class="text-slate-500 text-xs mb-1">进行中的任务</div>
+              <div class="text-slate-500 text-xs mb-1">进行中</div>
               <div class="text-2xl font-bold text-slate-800" id="runningCount">0</div>
             </div>
           </div>
-          <div id="statusPendingCard" class="bg-white p-5 rounded-xl border border-slate-200 flex items-center gap-4 cursor-pointer transition-all hover:border-blue-300">
+          <div id="statusPendingCard" class="bg-white px-5 py-3 h-full overflow-hidden rounded-xl border border-slate-200 flex items-center gap-4 cursor-pointer transition-all hover:border-blue-300">
             <div class="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
               <i data-lucide="clock" class="w-6 h-6"></i>
             </div>
             <div>
-              <div class="text-slate-500 text-xs mb-1">待处理队列</div>
+              <div class="text-slate-500 text-xs mb-1">待处理</div>
               <div class="text-2xl font-bold text-slate-800" id="queueCount">0</div>
             </div>
           </div>
-          <div id="statusCompletedCard" class="bg-white p-5 rounded-xl border border-slate-200 flex items-center gap-4 cursor-pointer transition-all hover:border-emerald-300">
+          <div id="statusCompletedCard" class="bg-white px-5 py-3 h-full overflow-hidden rounded-xl border border-slate-200 flex items-center gap-4 cursor-pointer transition-all hover:border-emerald-300">
             <div class="w-12 h-12 rounded-full bg-emerald-50 flex items-center justify-center text-emerald-600">
               <i data-lucide="check-circle" class="w-6 h-6"></i>
             </div>
             <div>
-              <div class="text-slate-500 text-xs mb-1">今日累计完成</div>
+              <div class="text-slate-500 text-xs mb-1">累计完成</div>
               <div class="text-2xl font-bold text-slate-800" id="completedCount">0</div>
             </div>
           </div>
-          <div id="statusErrorCard" class="bg-white p-5 rounded-xl border border-slate-200 flex items-center gap-4 cursor-pointer transition-all hover:border-rose-300">
+          <div id="statusErrorCard" class="bg-white px-5 py-3 h-full overflow-hidden rounded-xl border border-slate-200 flex items-center gap-4 cursor-pointer transition-all hover:border-rose-300">
             <div class="w-12 h-12 rounded-full bg-rose-50 flex items-center justify-center text-rose-600">
               <i data-lucide="alert-circle" class="w-6 h-6"></i>
             </div>
             <div>
-              <div class="text-slate-500 text-xs mb-1">今日异常终止</div>
+              <div class="text-slate-500 text-xs mb-1">异常终止</div>
               <div class="text-2xl font-bold text-slate-800" id="failedCount">0</div>
             </div>
           </div>
         </div>
 
-        <div class="bg-white rounded-xl border border-slate-200 flex flex-col min-h-[400px]">
-          <div class="px-6 py-3 border-b border-slate-100 flex items-center justify-between">
+        <div class="bg-white rounded-xl border border-slate-200 flex flex-col h-[550px] min-h-[550px] mb-[20px] overflow-hidden pb-[2px]">
+          <div class="px-6 h-[55px] border-b border-slate-100 flex items-center justify-between">
             <div id="taskStatusTabs" class="flex items-center gap-8 text-sm">
               <button data-status="pending" class="pb-2 border-b-2 border-transparent text-slate-500 hover:text-slate-700 transition-colors">
                 等待中 (<span id="pendingTabCount">0</span>)
@@ -196,14 +206,15 @@
             </div>
           </div>
 
-          <div class="px-6 py-3 border-b border-slate-100 flex items-center justify-between">
-            <div id="taskTypeFilters" class="flex items-center gap-2 bg-slate-50 p-1 rounded-lg">
-              <button data-filter-type="全部" class="px-4 py-1.5 text-sm rounded-md transition-all bg-white text-violet-600 shadow-sm font-medium">全部</button>
-              <button data-filter-type="下载" class="px-4 py-1.5 text-sm rounded-md transition-all text-slate-500 hover:text-slate-700 hover:bg-slate-200/50">下载</button>
-              <button data-filter-type="转码" class="px-4 py-1.5 text-sm rounded-md transition-all text-slate-500 hover:text-slate-700 hover:bg-slate-200/50">转码</button>
-              <button data-filter-type="语音转写" class="px-4 py-1.5 text-sm rounded-md transition-all text-slate-500 hover:text-slate-700 hover:bg-slate-200/50">语音转写</button>
-              <button data-filter-type="字幕挂载" class="px-4 py-1.5 text-sm rounded-md transition-all text-slate-500 hover:text-slate-700 hover:bg-slate-200/50">字幕挂载</button>
-              <button data-filter-type="视频分析" class="px-4 py-1.5 text-sm rounded-md transition-all text-slate-500 hover:text-slate-700 hover:bg-slate-200/50">视频分析</button>
+          <div class="px-6 h-[55px] border-b border-slate-100 flex items-center justify-between">
+            <div id="taskTypeFilters" class="relative flex items-center gap-2 bg-slate-50 p-1 rounded-lg">
+              <span id="taskTypeFilterIndicator" class="type-filter-indicator"></span>
+              <button data-filter-type="全部" class="relative z-10 px-4 py-1.5 text-sm rounded-md transition-colors text-violet-600 font-medium">全部</button>
+              <button data-filter-type="下载" class="relative z-10 px-4 py-1.5 text-sm rounded-md transition-colors text-slate-500 hover:text-slate-700">下载</button>
+              <button data-filter-type="转码" class="relative z-10 px-4 py-1.5 text-sm rounded-md transition-colors text-slate-500 hover:text-slate-700">转码</button>
+              <button data-filter-type="语音转写" class="relative z-10 px-4 py-1.5 text-sm rounded-md transition-colors text-slate-500 hover:text-slate-700">语音转写</button>
+              <button data-filter-type="字幕挂载" class="relative z-10 px-4 py-1.5 text-sm rounded-md transition-colors text-slate-500 hover:text-slate-700">字幕挂载</button>
+              <button data-filter-type="视频分析" class="relative z-10 px-4 py-1.5 text-sm rounded-md transition-colors text-slate-500 hover:text-slate-700">视频分析</button>
             </div>
             <div id="completedRangeFilters" class="hidden items-center gap-2 text-xs text-slate-500">
               <span>完成时间</span>
@@ -221,28 +232,44 @@
             </div>
           </div>
 
-          <div class="grid px-6 py-3 text-xs font-medium text-slate-400 border-b border-slate-100" style="grid-template-columns: minmax(0,1fr) 600px 150px 400px 205px 185px;">
-            <div>任务 ID / 类型</div>
-            <div>关联班级与课次</div>
-            <div>状态详情</div>
-            <div>进度</div>
-            <div class="text-right" id="timeColHeader">开始时间</div>
-            <div class="text-right">操作</div>
-          </div>
+          <div class="flex-1 min-h-0 overflow-x-auto overflow-y-hidden">
+            <div id="taskTableInner" class="min-w-[1815px] h-full flex flex-col">
+              <div id="taskTableHeader" class="grid px-6 h-[40px] items-center text-xs font-medium text-slate-400 border-b border-slate-100" style="grid-template-columns: 275px 600px 150px 420px 185px 185px;">
+                <div class="leading-tight">任务 ID / 类型</div>
+                <div class="relative h-full flex items-center leading-tight pr-5">
+                  <span>关联班级与课次</span>
+                  <button type="button" data-resize-key="classInfo" class="absolute right-[4px] top-1/2 -translate-y-1/2 h-7 w-3 cursor-col-resize rounded hover:bg-violet-100/70" title="拖动调整列宽">
+                    <span class="absolute left-1/2 top-1/2 h-5 w-px -translate-x-1/2 -translate-y-1/2 bg-slate-300"></span>
+                  </button>
+                </div>
+                <div class="leading-tight">状态详情</div>
+                <div class="relative h-full flex items-center leading-tight pr-5">
+                  <span>进度</span>
+                  <button type="button" data-resize-key="progress" class="absolute right-[4px] top-1/2 -translate-y-1/2 h-7 w-3 cursor-col-resize rounded hover:bg-violet-100/70" title="拖动调整列宽">
+                    <span class="absolute left-1/2 top-1/2 h-5 w-px -translate-x-1/2 -translate-y-1/2 bg-slate-300"></span>
+                  </button>
+                </div>
+                <div class="text-center leading-tight" id="timeColHeader">开始时间</div>
+                <div class="text-center leading-tight">操作</div>
+              </div>
 
-          <div id="taskRows" class="divide-y divide-slate-50"></div>
-          <div id="taskLoadingHint" class="px-6 py-12 text-center text-slate-400 text-sm hidden">
-            <div class="inline-flex items-center gap-2">
-              <i data-lucide="loader-circle" class="w-4 h-4 animate-spin"></i>
-              <span>正在加载任务数据...</span>
-            </div>
-          </div>
-          <div id="emptyHint" class="px-6 py-12 text-center text-slate-400 text-sm hidden">暂无相关任务数据</div>
-          <div class="px-6 py-3 border-t border-slate-100 flex items-center justify-between">
-            <div id="taskPageInfo" class="text-xs text-slate-400">第 1 / 1 页</div>
-            <div class="flex items-center gap-2">
-              <button id="taskPagePrevBtn" class="px-3 py-1.5 text-xs rounded border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">上一页</button>
-              <button id="taskPageNextBtn" class="px-3 py-1.5 text-xs rounded border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">下一页</button>
+              <div id="taskRowsScroll" class="flex-1 min-h-0 overflow-y-auto">
+                <div id="taskRows" class="divide-y divide-slate-50"></div>
+                <div id="taskLoadingHint" class="px-6 py-12 text-center text-slate-400 text-sm hidden">
+                  <div class="inline-flex items-center gap-2">
+                    <i data-lucide="loader-circle" class="w-4 h-4 animate-spin"></i>
+                    <span>正在加载任务数据...</span>
+                  </div>
+                </div>
+                <div id="emptyHint" class="px-6 py-12 text-center text-slate-400 text-sm hidden">暂无相关任务数据</div>
+              </div>
+              <div class="px-6 h-[45px] min-h-[45px] border-t border-slate-100 flex items-center justify-between">
+                <div id="taskPageInfo" class="h-full flex items-center text-xs leading-none text-slate-400">第 1 / 1 页</div>
+                <div class="flex items-center gap-2 h-full">
+                  <button id="taskPagePrevBtn" class="h-8 px-3 py-0 inline-flex items-center text-xs rounded border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">上一页</button>
+                  <button id="taskPageNextBtn" class="h-8 px-3 py-0 inline-flex items-center text-xs rounded border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">下一页</button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -485,7 +512,7 @@
 
                 <div class="col-span-3 text-slate-500 flex items-center justify-end">关联任务</div>
                 <div class="col-span-9">
-                  <div class="min-h-10 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 flex items-center text-slate-800 font-mono break-all" id="downloadInfoOtherTasks">-</div>
+                  <div class="min-h-10 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 flex flex-wrap items-center gap-2 text-slate-800 break-all" id="downloadInfoOtherTasks">-</div>
                 </div>
               </div>
             </div>
@@ -648,7 +675,7 @@
           </div>
 
     <template id="taskRowTpl">
-      <div class="grid px-6 py-4 items-center hover:bg-slate-50/50 transition-colors group" data-role="row" style="grid-template-columns: minmax(0,1fr) 600px 150px 400px 205px 185px;">
+      <div class="grid px-6 h-[70px] items-center hover:bg-[#EFF6F6] transition-colors group" data-role="row" style="grid-template-columns: 275px 600px 150px 420px 185px 185px;">
         <div class="flex items-start gap-3 min-w-0">
           <div class="w-9 h-9 rounded-lg flex items-center justify-center border bg-slate-50 border-slate-200 text-slate-600" data-role="iconBox">
             <i data-lucide="file-text" class="w-5 h-5" data-role="icon"></i>
@@ -672,8 +699,8 @@
           </div>
           <div class="mt-1 text-[12px] text-slate-500 font-mono hidden" data-role="downloadDetail">-</div>
         </div>
-        <div class="text-right text-xs text-slate-400 font-mono" data-role="startTime">-</div>
-        <div class="flex justify-end gap-2">
+        <div class="text-center text-xs text-slate-400 font-mono" data-role="startTime">-</div>
+        <div class="flex justify-center gap-2">
           <button data-action="open-folder" title="打开下载目录" class="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors hidden" data-role="openFolderBtn">
             <i data-lucide="folder-open" class="w-3.5 h-3.5"></i>
           </button>
@@ -722,7 +749,6 @@
 
       const el = (id) => document.getElementById(id);
 
-      const startedAtLocalMs = Date.now();
       const fmt = (iso) => {
         if (!iso || iso === '-') return '-';
         try {
@@ -741,6 +767,68 @@
           return '-';
         }
       };
+      const parseMonitorTimeMs = (text) => {
+        const value = String(text || '').trim();
+        if (!value || value === '-') return NaN;
+        const ts = Date.parse(value);
+        return Number.isFinite(ts) ? ts : NaN;
+      };
+      const TASK_GRID_STORAGE_KEY = 'edge.monitor.taskGridWidths.v1';
+      const TASK_GRID_HORIZONTAL_PADDING = 48;
+      const TASK_GRID_MIN_WIDTHS = Object.freeze({
+        task: 275,
+        classInfo: 600,
+        status: 150,
+        progress: 420,
+        time: 185,
+        actions: 185,
+      });
+      const loadTaskGridWidths = () => {
+        let saved = {};
+        try {
+          saved = JSON.parse(localStorage.getItem(TASK_GRID_STORAGE_KEY) || '{}') || {};
+        } catch (e) {}
+        return {
+          task: TASK_GRID_MIN_WIDTHS.task,
+          classInfo: Math.max(TASK_GRID_MIN_WIDTHS.classInfo, Number(saved.classInfo || TASK_GRID_MIN_WIDTHS.classInfo)),
+          status: TASK_GRID_MIN_WIDTHS.status,
+          progress: Math.max(TASK_GRID_MIN_WIDTHS.progress, Number(saved.progress || TASK_GRID_MIN_WIDTHS.progress)),
+          time: TASK_GRID_MIN_WIDTHS.time,
+          actions: TASK_GRID_MIN_WIDTHS.actions,
+        };
+      };
+      const saveTaskGridWidths = () => {
+        try {
+          localStorage.setItem(TASK_GRID_STORAGE_KEY, JSON.stringify({
+            classInfo: Number(taskGridWidths.classInfo || TASK_GRID_MIN_WIDTHS.classInfo),
+            progress: Number(taskGridWidths.progress || TASK_GRID_MIN_WIDTHS.progress),
+          }));
+        } catch (e) {}
+      };
+      const buildTaskGridTemplate = () => (
+        `${taskGridWidths.task}px ${taskGridWidths.classInfo}px ${taskGridWidths.status}px ${taskGridWidths.progress}px ${taskGridWidths.time}px ${taskGridWidths.actions}px`
+      );
+      const buildTaskGridMinWidth = () => (
+        taskGridWidths.task
+        + taskGridWidths.classInfo
+        + taskGridWidths.status
+        + taskGridWidths.progress
+        + taskGridWidths.time
+        + taskGridWidths.actions
+        + TASK_GRID_HORIZONTAL_PADDING
+      );
+      const applyTaskGridLayout = (node) => {
+        if (!node) return;
+        node.style.gridTemplateColumns = buildTaskGridTemplate();
+      };
+      const applyTaskGridLayoutToAll = () => {
+        applyTaskGridLayout(el('taskTableHeader'));
+        for (const rowNode of taskRowNodes.values()) applyTaskGridLayout(rowNode);
+        const inner = el('taskTableInner');
+        if (inner) inner.style.minWidth = `${buildTaskGridMinWidth()}px`;
+      };
+      let taskGridWidths = loadTaskGridWidths();
+      let activeColumnResize = null;
       let currentMeta = { serviceId: '-', version: '1.0.0', connectionName: '', serverAddress: '', campusCode: '', schoolAreaName: '', serverId: '', startDate: '', heartbeatStatus: 'idle', lastHeartbeatAt: '' };
       let filterType = '全部';
       let statusFilter = 'running';
@@ -783,6 +871,41 @@
       let completedEndDate = '';
       let lastCompletedAutoRefreshAt = 0;
       const COMPLETED_TASK_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+
+      const stopTaskColumnResize = () => {
+        if (!activeColumnResize) return;
+        window.removeEventListener('mousemove', handleTaskColumnResizeMove);
+        window.removeEventListener('mouseup', stopTaskColumnResize);
+        document.body.classList.remove('select-none');
+        document.body.style.cursor = '';
+        saveTaskGridWidths();
+        activeColumnResize = null;
+      };
+
+      const handleTaskColumnResizeMove = (event) => {
+        if (!activeColumnResize) return;
+        const key = String(activeColumnResize.key || '');
+        const minWidth = Number(TASK_GRID_MIN_WIDTHS[key] || 0);
+        if (!minWidth) return;
+        const delta = Number(event.clientX || 0) - Number(activeColumnResize.startX || 0);
+        taskGridWidths[key] = Math.max(minWidth, Math.round(Number(activeColumnResize.startWidth || minWidth) + delta));
+        applyTaskGridLayoutToAll();
+      };
+
+      const startTaskColumnResize = (key, event) => {
+        const columnKey = String(key || '').trim();
+        if (!columnKey || !(columnKey in TASK_GRID_MIN_WIDTHS)) return;
+        event.preventDefault();
+        activeColumnResize = {
+          key: columnKey,
+          startX: Number(event.clientX || 0),
+          startWidth: Number(taskGridWidths[columnKey] || TASK_GRID_MIN_WIDTHS[columnKey]),
+        };
+        document.body.classList.add('select-none');
+        document.body.style.cursor = 'col-resize';
+        window.addEventListener('mousemove', handleTaskColumnResizeMove);
+        window.addEventListener('mouseup', stopTaskColumnResize);
+      };
 
       const renderTaskRefreshState = () => {
         const countEl = el('taskListCount');
@@ -1072,6 +1195,53 @@
         if (speechRow) speechRow.classList.toggle('hidden', !packageCapabilities.speech);
         const subtitleRow = el('subtitleConcurrencyRow');
         if (subtitleRow) subtitleRow.classList.toggle('hidden', !packageCapabilities.subtitle);
+        const typeCapability = {
+          '下载': !!packageCapabilities.download,
+          '转码': !!packageCapabilities.transcode,
+          '语音转写': !!packageCapabilities.speech,
+          '字幕挂载': !!packageCapabilities.subtitle,
+          '视频分析': !!packageCapabilities.analysis,
+        };
+        const typeWrap = el('taskTypeFilters');
+        if (typeWrap) {
+          for (const btn of typeWrap.querySelectorAll('button[data-filter-type]')) {
+            const type = btn.getAttribute('data-filter-type');
+            if (type === '全部') {
+              btn.classList.remove('hidden');
+            } else {
+              btn.classList.toggle('hidden', typeCapability[type] === false);
+            }
+          }
+          if (filterType !== '全部' && typeCapability[filterType] === false) {
+            filterType = '全部';
+            setActiveTypeFilter('全部', { skipRefresh: true });
+          }
+        }
+      };
+
+      const fetchConcurrencySettings = async () => {
+        try {
+          const res = await fetch('/api/concurrency', { cache: 'no-store' });
+          const j = await res.json().catch(() => ({}));
+          if (res.ok && j && j.ok && j.concurrency) {
+            concurrencyCfg = { ...concurrencyCfg, ...j.concurrency };
+            downloadPath = String(j.downloadPath || 'D:\\Videos');
+            speechModel = String(j.speechModel || 'medium');
+            executionMode = String(j.executionMode || 'manual');
+            packageMode = String(j.packageMode || 'all');
+            packageCapabilities = { ...packageCapabilities, ...(j.packageCapabilities || {}) };
+            enableStreamProxy = !!j.enableStreamProxy;
+            publicBaseUrl = String(j.publicBaseUrl || '');
+            publicHost = String(j.publicHost || '');
+            publicPort = String(j.publicPort || '');
+            publicScheme = String(j.publicScheme || '');
+            renderConcurrencyValues();
+          } else {
+            applyPackageCapabilityVisibility();
+          }
+        } catch (e) {
+          applyPackageCapabilityVisibility();
+        }
       };
 
       const renderConcurrencyValues = () => {
@@ -1112,25 +1282,65 @@
         showOverlay('concurrencyOverlay');
         renderConcurrencyValues();
         lucide.createIcons();
-        fetch('/api/concurrency', { cache: 'no-store' })
-          .then(res => res.json().then(j => ({ res, j })).catch(() => ({ res, j: {} })))
-          .then(({ res, j }) => {
-            if (res.ok && j && j.ok && j.concurrency) {
-              concurrencyCfg = { ...concurrencyCfg, ...j.concurrency };
-              downloadPath = String(j.downloadPath || 'D:\\Videos');
-              speechModel = String(j.speechModel || 'medium');
-              executionMode = String(j.executionMode || 'manual');
-              packageMode = String(j.packageMode || 'all');
-              packageCapabilities = { ...packageCapabilities, ...(j.packageCapabilities || {}) };
-              enableStreamProxy = !!j.enableStreamProxy;
-              publicBaseUrl = String(j.publicBaseUrl || '');
-              publicHost = String(j.publicHost || '');
-              publicPort = String(j.publicPort || '');
-              publicScheme = String(j.publicScheme || '');
-              renderConcurrencyValues();
-            }
-          })
-          .catch(() => {});
+        fetchConcurrencySettings();
+      };
+
+      const taskStatusDisplayLabel = (statusType, fallback) => {
+        const st = String(statusType || '').trim();
+        if (st === 'pending') return '等待中';
+        if (st === 'running') return '进行中';
+        if (st === 'completed') return '已完成';
+        if (st === 'error') return '失败';
+        if (st === 'paused') return '已暂停';
+        return String(fallback || '').trim() || '状态未知';
+      };
+
+      const taskStatusBadgeClass = (statusType) => {
+        const st = String(statusType || '').trim();
+        if (st === 'completed') return 'bg-emerald-50 text-emerald-600 border-emerald-200';
+        if (st === 'error') return 'bg-rose-50 text-rose-600 border-rose-200';
+        if (st === 'running') return 'bg-blue-50 text-blue-600 border-blue-200';
+        return 'bg-slate-100 text-slate-600 border-slate-200';
+      };
+
+      const quickActionForStatus = (statusType) => {
+        const st = String(statusType || '').trim();
+        if (st === 'pending') return { action: 'start', label: '开始执行' };
+        if (st === 'running') return { action: 'pause', label: '暂停任务' };
+        if (st === 'completed') return { action: 'rerun', label: '重新执行' };
+        if (st === 'error') return { action: 'retry', label: '重新执行' };
+        return null;
+      };
+
+      const renderDownloadOtherTask = (meta) => {
+        const host = el('downloadInfoOtherTasks');
+        host.textContent = '';
+        const otherTaskId = String(meta && meta.otherTasksId || '').trim();
+        if (!otherTaskId) {
+          host.textContent = '-';
+          return;
+        }
+        const taskId = `${otherTaskId}-DOWNLOAD`;
+        const indexed = taskIndex.get(taskId) || null;
+        const statusType = String((indexed && indexed.statusType) || (meta && meta.otherTaskStatusType) || '').trim();
+        const statusText = taskStatusDisplayLabel(statusType, (indexed && indexed.status) || (meta && meta.otherTaskStatus) || '');
+        const idSpan = document.createElement('span');
+        idSpan.textContent = otherTaskId;
+        idSpan.className = 'font-mono text-slate-800';
+        host.appendChild(idSpan);
+        const badge = document.createElement('span');
+        badge.textContent = statusText;
+        badge.className = 'inline-flex items-center h-6 px-2 rounded-full border text-xs font-medium ' + taskStatusBadgeClass(statusType);
+        host.appendChild(badge);
+        const quick = quickActionForStatus(statusType);
+        if (!quick) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = quick.label;
+        btn.dataset.action = quick.action;
+        btn.dataset.taskId = taskId;
+        btn.className = 'h-7 px-2.5 rounded-md border border-slate-200 bg-white text-xs text-slate-700 hover:bg-slate-50 hover:text-violet-600 transition-colors';
+        host.appendChild(btn);
       };
 
       const openDownloadInfoModal = (meta) => {
@@ -1141,7 +1351,7 @@
         el('downloadInfoNvrAddr').textContent = String(m.nvrAddress || '-');
         el('downloadInfoNvrChannel').textContent = String(m.nvrChannel || '-');
         el('downloadInfoRange').textContent = fmtRange(m.lessonStartAt, m.lessonEndAt);
-        el('downloadInfoOtherTasks').textContent = String(m.otherTasksId || '-');
+        renderDownloadOtherTask(m);
         showOverlay('downloadInfoOverlay');
         lucide.createIcons();
       };
@@ -1267,9 +1477,35 @@
         '字幕挂载': 'subtitle',
         '视频分析': 'analysis'
       };
+      const taskTypeEnabled = (type) => {
+        if (type === 'download') return !!packageCapabilities.download;
+        if (type === 'transcode') return !!packageCapabilities.transcode;
+        if (type === 'asr') return !!packageCapabilities.speech;
+        if (type === 'subtitle') return !!packageCapabilities.subtitle;
+        if (type === 'analysis') return !!packageCapabilities.analysis;
+        return true;
+      };
+      const filterLabelEnabled = (label) => {
+        if (label === '全部') return true;
+        return taskTypeEnabled(typeMap[label]);
+      };
+      const updateTaskTypeIndicator = () => {
+        const wrap = el('taskTypeFilters');
+        const indicator = el('taskTypeFilterIndicator');
+        if (!wrap || !indicator) return;
+        const active = wrap.querySelector(`button[data-filter-type="${filterType}"]:not(.hidden)`);
+        if (!active) {
+          indicator.style.width = '0px';
+          return;
+        }
+        const wrapRect = wrap.getBoundingClientRect();
+        const activeRect = active.getBoundingClientRect();
+        indicator.style.width = `${activeRect.width}px`;
+        indicator.style.transform = `translateX(${activeRect.left - wrapRect.left - 4}px)`;
+      };
 
       const applyFilters = (tasks) => {
-        let out = tasks.slice();
+        let out = tasks.filter(x => taskTypeEnabled(x.type));
         if (filterType !== '全部') {
           const t = typeMap[filterType];
           out = out.filter(x => x.type === t);
@@ -1303,11 +1539,14 @@
         currentTasksPage = 1;
         const wrap = el('taskTypeFilters');
         for (const btn of wrap.querySelectorAll('button[data-filter-type]')) {
-          const isActive = btn.getAttribute('data-filter-type') === next;
-          btn.className = 'px-4 py-1.5 text-sm rounded-md transition-all ' + (isActive
-            ? 'bg-white text-violet-600 shadow-sm font-medium'
-            : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50');
+          const typeLabel = btn.getAttribute('data-filter-type');
+          const isActive = typeLabel === next;
+          btn.className = 'relative z-10 px-4 py-1.5 text-sm rounded-md transition-colors ' + (isActive
+            ? 'text-violet-600 font-medium'
+            : 'text-slate-500 hover:text-slate-700');
+          btn.classList.toggle('hidden', !filterLabelEnabled(typeLabel));
         }
+        requestAnimationFrame(updateTaskTypeIndicator);
         renderTaskList();
         if (!(opts && opts.skipRefresh)) {
           refreshTasks({ force: true, page: 1 }).catch(() => {});
@@ -1395,7 +1634,7 @@
         const wrap = el('serviceStatus');
         const dot = el('serviceDot');
         const text = el('serviceStatusText');
-        wrap.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium';
+        wrap.className = 'h-[32px] min-h-[32px] max-h-[32px] box-border flex items-center gap-2 px-3 py-0 rounded-lg border text-sm font-medium leading-none';
         dot.className = 'w-2 h-2 rounded-full animate-pulse';
         if (mode === 'running') {
           wrap.classList.add('bg-emerald-50','border-emerald-100','text-emerald-600');
@@ -1491,6 +1730,7 @@
         const existing = taskRowNodes.get(r.id);
         const tpl = el('taskRowTpl');
         const root = existing || tpl.content.firstElementChild.cloneNode(true);
+        applyTaskGridLayout(root);
         root.dataset.taskId = r.id;
         root.dataset.statusType = r.statusType;
         root.querySelector('[data-role="name"]').textContent = r.name;
@@ -1852,18 +2092,31 @@
         });
       };
 
+      const updateUptimeDisplay = (s = latestState) => {
+        if (!s) {
+          el('uptime').textContent = '-';
+          return;
+        }
+        const startedAtMs = parseMonitorTimeMs(s.startedAt);
+        if (Number.isFinite(startedAtMs)) {
+          const upSec = Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000));
+          const h = String(Math.floor(upSec / 3600)).padStart(2, '0');
+          const m = String(Math.floor((upSec % 3600) / 60)).padStart(2, '0');
+          const ss = String(upSec % 60).padStart(2, '0');
+          el('uptime').textContent = h + ':' + m + ':' + ss;
+        } else {
+          el('uptime').textContent = '-';
+        }
+      };
+
       const renderState = (s) => {
         // nodeIp 将由 fetchLocalIp 单独更新
-        el('lastPollAt').textContent = fmt(s.lastPollAt);
+        const lastPollAtEl = el('lastPollAt');
+        if (lastPollAtEl) lastPollAtEl.textContent = fmt(s.lastPollAt);
         // lastReportAt 优先用接口返回的全局最近上报时间，其次用当前运行任务的上报时间
         const lr = s.lastReportAt || s.running?.lastReportAt || null;
         el('lastReportAt').textContent = lr ? fmt(lr) : '-';
-
-        const upSec = Math.floor((Date.now() - startedAtLocalMs) / 1000);
-        const h = String(Math.floor(upSec / 3600)).padStart(2,'0');
-        const m = String(Math.floor((upSec % 3600) / 60)).padStart(2,'0');
-        const ss = String(upSec % 60).padStart(2,'0');
-        el('uptime').textContent = h + ':' + m + ':' + ss;
+        updateUptimeDisplay(s);
 
         const connected = !!String(currentMeta.serverAddress || '').trim();
         const addr = String(currentMeta.serverAddress || '').trim().toLowerCase();
@@ -2447,6 +2700,26 @@
       el('openedDirPanelClose').addEventListener('click', () => el('openedDirPanel').classList.add('hidden'));
       el('downloadInfoClose').addEventListener('click', () => closeDownloadInfoModal());
       el('downloadInfoOk').addEventListener('click', () => closeDownloadInfoModal());
+      el('downloadInfoOtherTasks').addEventListener('click', async (e) => {
+        const btn = e.target.closest('button[data-action][data-task-id]');
+        if (!btn) return;
+        const action = String(btn.dataset.action || '').trim();
+        const taskId = String(btn.dataset.taskId || '').trim();
+        if (!action || !taskId) return;
+        const connected = !!String(currentMeta.serverAddress || '').trim();
+        const addr = String(currentMeta.serverAddress || '').trim().toLowerCase();
+        const useMock = !connected || addr === 'mock' || addr.startsWith('mock://');
+        if (useMock) {
+          showToast(false, '请先连接服务器');
+          return;
+        }
+        closeDownloadInfoModal();
+        if (action === 'rerun') {
+          openRerunConfirmModal(taskId);
+          return;
+        }
+        await performTaskAction(action, taskId);
+      });
       el('taskProgressClose').addEventListener('click', () => closeTaskProgressModal());
       el('taskProgressOk').addEventListener('click', () => closeTaskProgressModal());
       el('toastClose').addEventListener('click', () => hideOverlay('toastOverlay'));
@@ -2533,7 +2806,11 @@
       el('taskTypeFilters').addEventListener('click', (e) => {
         const btn = e.target.closest('button[data-filter-type]');
         if (!btn) return;
+        if (btn.classList.contains('hidden')) return;
         setActiveTypeFilter(btn.getAttribute('data-filter-type'));
+      });
+      window.addEventListener('resize', () => {
+        requestAnimationFrame(updateTaskTypeIndicator);
       });
 
       el('statusRunningCard').addEventListener('click', () => { setActiveStatusFilter('running'); tick(); });
@@ -2609,6 +2886,11 @@
         }
         await performTaskAction(action, taskId);
       });
+      el('taskTableHeader').addEventListener('mousedown', (e) => {
+        const handle = e.target.closest('[data-resize-key]');
+        if (!handle) return;
+        startTaskColumnResize(handle.getAttribute('data-resize-key'), e);
+      });
 
       el('testConnBtn').addEventListener('click', async () => {
         const addr = el('serverAddrInput').value.trim();
@@ -2663,11 +2945,15 @@
 
       tickMetrics();
       fetchLocalIp();
+      applyTaskGridLayoutToAll();
       setActiveTypeFilter(filterType);
       setActiveStatusFilter('running', { skipRefresh: true });
-      fetchMeta().then(async () => { tick(); refreshTasks(); });
+      fetchConcurrencySettings().then(() => {
+        fetchMeta().then(async () => { tick(); refreshTasks(); });
+      });
       setInterval(() => { tickMetrics(); }, 1000);
-      setInterval(() => { tick(); }, 1000);
+      setInterval(() => { updateUptimeDisplay(); }, 1000);
+      setInterval(() => { tick(); }, 20000);
       setInterval(() => { refreshTasks(); }, 20000);
     </script>
   </body>

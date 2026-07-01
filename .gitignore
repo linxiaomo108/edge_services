@@ -2,6 +2,15 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.ts
+*.flv
+*.zip
+*.rar
+*.7z
 
 .venv/
 .cache/

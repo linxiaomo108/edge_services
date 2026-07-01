@@ -25,6 +25,9 @@ _log = logging.getLogger("edge.mobile_record")
 ACTIVE_STATUSES = ("starting", "recording", "stopping")
 FINAL_STATUSES = ("finished", "cancelled", "failed", "interrupted")
 HLS_SEGMENT_SECONDS = 10
+MEDIA_START_WAIT_SECONDS = 3.0
+AUTO_STOP_MEDIA_TOLERANCE_SECONDS = 1.0
+AUTO_STOP_MAX_EXTRA_SECONDS = 20.0
 
 
 def _parse_dt(value: object) -> datetime | None:
@@ -154,6 +157,7 @@ class MobileRecordService:
         self._closed = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._noisy_warning_seen: dict[tuple[str, str], int] = {}
+        self._media_started_events: dict[str, threading.Event] = {}
 
     async def start_background(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -517,6 +521,9 @@ class MobileRecordService:
             "-hide_banner",
             "-loglevel",
             "warning",
+            "-nostats",
+            "-progress",
+            "pipe:1",
             "-rtsp_transport",
             "tcp",
             "-rtsp_flags",
@@ -571,6 +578,32 @@ class MobileRecordService:
 
         threading.Thread(target=_worker, name=f"mobile-record-ffmpeg-{task_id}", daemon=True).start()
 
+    def _drain_ffmpeg_stdout_progress(self, task_id: str, proc: subprocess.Popen) -> None:
+        event = self._media_started_events.setdefault(task_id, threading.Event())
+
+        def _worker() -> None:
+            stream = proc.stdout
+            if stream is None:
+                return
+            try:
+                for raw in iter(stream.readline, b""):
+                    line = bytes(raw or b"").decode("utf-8", errors="ignore").strip()
+                    if not line:
+                        continue
+                    key, sep, value = line.partition("=")
+                    if not sep:
+                        continue
+                    if key in {"out_time_us", "out_time_ms"}:
+                        if _as_int(value) > 0:
+                            event.set()
+                    elif key == "frame":
+                        if _as_int(value) > 0:
+                            event.set()
+            except Exception:
+                _log.debug("mobile record ffmpeg progress reader ended task=%s", task_id, exc_info=True)
+
+        threading.Thread(target=_worker, name=f"mobile-record-progress-stdout-{task_id}", daemon=True).start()
+
     def _start_record_progress_logger(self, task_id: str, proc: subprocess.Popen, req: dict[str, Any], out_dir: Path, started_at: datetime, estimated_seconds: int) -> None:
         def _worker() -> None:
             last_progress_callback_at = time.time()
@@ -622,9 +655,6 @@ class MobileRecordService:
             active_channel = self._active_for_channel(nvr_device_id_value, nvr_channel_num_value)
             if active_channel:
                 return False, {"code": "CHANNEL_RECORDING_CONFLICT", "message": "当前通道/教室已有录制任务", "current": self._status_payload(active_channel)}, 409
-            active_user = self._active_for_user(record_user_id)
-            if active_user:
-                return False, {"code": "USER_RECORDING_CONFLICT", "message": "当前录制人已有进行中的录制", "current": self._status_payload(active_user)}, 409
 
             estimated = max(60, min(_as_int(req.get("estimatedDurationSeconds"), 1800), 6 * 3600))
             now = _now_dt()
@@ -689,7 +719,7 @@ class MobileRecordService:
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=False,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -706,7 +736,6 @@ class MobileRecordService:
             self._processes[task_id] = proc
             play_url = self._public_play_url(request_base_url, task_id)
             now_iso = now.isoformat(timespec="seconds")
-            max_iso = max_end.isoformat(timespec="seconds")
             with self._db.connect() as conn:
                 conn.execute(
                     """
@@ -729,11 +758,11 @@ INSERT INTO edge_mobile_record_task(
                         str(req.get("provider") or "hikvision").strip() or "hikvision",
                         record_user_id,
                         str(req.get("recordUserName") or "").strip(),
-                        "recording",
+                        "starting",
                         estimated,
                         0,
                         now_iso,
-                        max_iso,
+                        None,
                         str(out_dir),
                         str(out_dir / "index.m3u8"),
                         play_url,
@@ -744,13 +773,61 @@ INSERT INTO edge_mobile_record_task(
                     ),
                 )
                 conn.commit()
-            self._event(task_id, "start", "录制已开始", {"pid": proc.pid, "outDir": str(out_dir)})
+            self._drain_ffmpeg_stderr(task_id, proc)
+            self._drain_ffmpeg_stdout_progress(task_id, proc)
+            self._event(task_id, "starting", "录制进程已启动，等待媒体写入", {"pid": proc.pid, "outDir": str(out_dir)})
+            try:
+                media_started_at, media_info = await self._wait_for_hls_media_start(task_id, proc, out_dir)
+            except Exception as exc:
+                await self._terminate_process(task_id, int(proc.pid or 0), graceful=False)
+                self._db.execute(
+                    "UPDATE edge_mobile_record_task SET status='failed', finish_time=?, error_message=?, updated_time=? WHERE task_id=?",
+                    (bjt_now_iso(), f"录像设备取流失败：{exc}", bjt_now_iso(), task_id),
+                )
+                self._event(task_id, "failed", "录制媒体启动失败", {"error": str(exc)})
+                return False, {"code": "NETWORK_ERROR", "message": f"录像设备取流失败：{exc}"}, 502
+
+            start_iso = media_started_at.isoformat(timespec="seconds")
+            max_iso = (media_started_at + timedelta(seconds=estimated)).isoformat(timespec="seconds")
+            self._db.execute(
+                "UPDATE edge_mobile_record_task SET status='recording', start_time=?, max_end_time=?, updated_time=? WHERE task_id=?",
+                (start_iso, max_iso, bjt_now_iso(), task_id),
+            )
+            self._event(task_id, "start", "录制已开始", {"pid": proc.pid, "outDir": str(out_dir), "media": media_info})
             row = self._fetch_task(task_id)
             self._log_task_started(task_id, req, status="recording")
-            self._drain_ffmpeg_stderr(task_id, proc)
-            self._start_record_progress_logger(task_id, proc, req, out_dir, now, estimated)
+            self._start_record_progress_logger(task_id, proc, req, out_dir, media_started_at, estimated)
             await self._callback_later(row)
             return True, self._status_payload(row, request_base_url=request_base_url), 200
+
+    async def prewarm_recording_session(self, req: dict[str, Any]) -> None:
+        nvr_device_id_value = _as_int(req.get("nvrDeviceId"))
+        nvr_channel_num_value = _as_int(req.get("nvrChannelNum"))
+        session, reused = await asyncio.to_thread(
+            self._session_manager.create_or_get_session,
+            campus_code=str(req.get("campusCode") or "").strip(),
+            nvr_device_id=nvr_device_id_value,
+            nvr_channel_num=nvr_channel_num_value,
+            nvr_channel_id=str(req.get("nvrChannelId") or "").strip(),
+            ip_address=str(req.get("ipAddress") or "").strip(),
+            port=_as_int(req.get("port"), 554),
+            account=str(req.get("account") or "").strip(),
+            password=str(req.get("password") or "").strip(),
+            provider=str(req.get("provider") or "").strip() or None,
+            candidate_channels=req.get("candidateChannels") if isinstance(req.get("candidateChannels"), list) else None,
+            stream_profile=str(req.get("streamProfile") or "main").strip() or "main",
+            output_protocol="mpegts",
+            reuse_if_exists=True,
+        )
+        _log.info(
+            "[MOBILE_RECORD_PREWARM] taskId=%s nvrDeviceId=%s nvrChannelNum=%s reused=%s sessionId=%s rtspUrl=%s",
+            str(req.get("taskId") or ""),
+            nvr_device_id_value,
+            nvr_channel_num_value,
+            bool(reused),
+            getattr(session, "session_id", ""),
+            _mask_url_secret(getattr(session, "rtsp_url", "")),
+        )
 
     def _read_playlist_duration_seconds(self, m3u8: Path) -> float:
         if not m3u8.exists():
@@ -794,6 +871,83 @@ INSERT INTO edge_mobile_record_task(
             "duration": float(duration),
             "codec": codec,
         }
+
+    def _has_started_hls_media(self, out_dir: Path) -> tuple[bool, dict[str, Any]]:
+        m3u8 = out_dir / "index.m3u8"
+        segments = sorted(out_dir.glob("segment_*.ts")) if out_dir.exists() else []
+        first_segment = segments[0] if segments else None
+        first_size = int(first_segment.stat().st_size) if first_segment and first_segment.exists() else 0
+        playlist_duration = self._read_playlist_duration_seconds(m3u8)
+        ok = bool(m3u8.exists() or first_size > 0)
+        return ok, {
+            "m3u8": str(m3u8),
+            "segmentCount": len(segments),
+            "firstSegment": str(first_segment or ""),
+            "firstSegmentSize": first_size,
+            "playlistDuration": playlist_duration,
+        }
+
+    async def _wait_for_hls_media_start(self, task_id: str, proc: subprocess.Popen, out_dir: Path) -> tuple[datetime, dict[str, Any]]:
+        deadline = time.time() + MEDIA_START_WAIT_SECONDS
+        last_info: dict[str, Any] = {}
+        event = self._media_started_events.setdefault(task_id, threading.Event())
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                stderr_text = ""
+                with contextlib.suppress(Exception):
+                    raw_err = proc.stderr.read() if proc.stderr is not None else b""
+                    stderr_text = bytes(raw_err or b"").decode("utf-8", errors="ignore").strip()
+                raise RuntimeError(f"record_ffmpeg_start_failed:exit={proc.returncode}:stderr={stderr_text[:500]}")
+            ok, info = self._has_started_hls_media(out_dir)
+            last_info = info
+            if event.is_set() or ok:
+                started_at = _now_dt()
+                _log.info(
+                    "%s 确认录制媒体已开始 progress=%s segmentCount=%s firstSegmentSize=%s playlistDuration=%.3fs",
+                    self._task_log_prefix(task_id, "recording"),
+                    "yes" if event.is_set() else "no",
+                    int(info.get("segmentCount") or 0),
+                    int(info.get("firstSegmentSize") or 0),
+                    float(info.get("playlistDuration") or 0.0),
+                )
+                return started_at, info
+            await asyncio.sleep(0.25)
+        if proc.poll() is None:
+            started_at = _now_dt()
+            _log.warning(
+                "%s 未在 %.1fs 内拿到明确进度，但进程仍在运行，按启动成功继续；需关注后续 HLS 是否生成。last=%s",
+                self._task_log_prefix(task_id, "recording"),
+                MEDIA_START_WAIT_SECONDS,
+                last_info,
+            )
+            return started_at, last_info
+        raise TimeoutError(f"record_media_start_timeout:{last_info}")
+
+    def _target_record_seconds(self, row: dict[str, Any]) -> int:
+        return max(
+            0,
+            _as_int(row.get("estimated_duration_seconds")) + _as_int(row.get("extend_duration_seconds")),
+        )
+
+    def _should_defer_auto_stop_for_media_duration(self, row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+        target_seconds = self._target_record_seconds(row)
+        start_dt = _parse_dt(row.get("start_time"))
+        if target_seconds <= 0 or start_dt is None:
+            return False, {"target": target_seconds, "duration": 0.0, "wall_elapsed": 0.0}
+
+        now_dt = _now_dt()
+        wall_elapsed = max(0.0, (now_dt - start_dt).total_seconds())
+        info = self._collect_hls_info(row, lightweight=True)
+        media_duration = float(info.get("duration") or 0.0)
+        missing = float(target_seconds) - media_duration
+        if missing <= AUTO_STOP_MEDIA_TOLERANCE_SECONDS:
+            info.update({"target": target_seconds, "wall_elapsed": wall_elapsed, "missing": missing})
+            return False, info
+        if wall_elapsed >= float(target_seconds) + AUTO_STOP_MAX_EXTRA_SECONDS:
+            info.update({"target": target_seconds, "wall_elapsed": wall_elapsed, "missing": missing})
+            return False, info
+        info.update({"target": target_seconds, "wall_elapsed": wall_elapsed, "missing": missing})
+        return True, info
 
     async def _terminate_process(self, task_id: str, pid: int, *, graceful: bool = True) -> None:
         proc = self._processes.get(task_id)
@@ -895,6 +1049,7 @@ WHERE task_id=?
             await self._callback_later(final_row)
         finally:
             self._finalizing_tasks.discard(task_id)
+            self._media_started_events.pop(task_id, None)
 
     async def stop_recording(self, task_id: str, *, action: str = "finish", operator_user_id: str = "", reason: str = "manual", request_base_url: str = "") -> tuple[bool, dict[str, Any], int]:
         task_id = str(task_id or "").strip()
@@ -1082,6 +1237,24 @@ WHERE task_id=?
         )
         for row in rows:
             task_id = str(row["task_id"])
+            defer, info = self._should_defer_auto_stop_for_media_duration(dict(row))
+            if defer:
+                delay = max(1, min(5, int(float(info.get("missing") or 0.0)) + 1))
+                next_check = (_now_dt() + timedelta(seconds=delay)).isoformat(timespec="seconds")
+                self._db.execute(
+                    "UPDATE edge_mobile_record_task SET max_end_time=?, updated_time=? WHERE task_id=?",
+                    (next_check, bjt_now_iso(), task_id),
+                )
+                _log.info(
+                    "%s 自动停止延后 mediaDuration=%.3fs target=%ss missing=%.3fs wallElapsed=%.1fs nextCheck=%s",
+                    self._task_log_prefix(task_id, "recording"),
+                    float(info.get("duration") or 0.0),
+                    int(info.get("target") or 0),
+                    float(info.get("missing") or 0.0),
+                    float(info.get("wall_elapsed") or 0.0),
+                    next_check,
+                )
+                continue
             self._db.execute("UPDATE edge_mobile_record_task SET auto_stop_time=?, updated_time=? WHERE task_id=?", (bjt_now_iso(), bjt_now_iso(), task_id))
             self._event(task_id, "auto_stop", "到达预计录制时长，自动停止")
             await self.stop_recording(task_id, action="finish", reason="auto_timeout")

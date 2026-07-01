@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Any, Literal
 from urllib.parse import quote
@@ -17,6 +18,7 @@ TASK_STATUS_DESC = (
     "`cancelled`=已取消且本地文件已删除；`failed`=失败；`interrupted`=服务异常中断。"
 )
 _log = logging.getLogger("edge.mobile_record.routes")
+SCHEDULE_PREPARE_SECONDS = 3
 
 
 def _mask_secret(value: object) -> str:
@@ -138,7 +140,7 @@ class MobileRecordClassroomStatusResponse(BaseModel):
 
 class MobileRecordStartResponse(BaseModel):
     code: str = Field(default="SUCCESS", description="启动结果码。固定值：`SUCCESS`=启动成功；`FAILED`=启动失败。")
-    message: str = Field(default="启动录制成功", description="启动结果说明。`code=SUCCESS` 时固定为“启动录制成功”；`code=FAILED` 时按实际原因返回：磁盘已满或剩余空间不足、录像设备取流失败、接口服务未启动、录制进程或依赖服务启动失败、任务ID重复、教室已被占用、当前通道/教室已有录制任务、录制人有进行中的录制任务、录制参数错误或其他原因。")
+    message: str = Field(default="启动录制成功", description="启动结果说明。`code=SUCCESS` 时固定为“启动录制成功”；`code=FAILED` 时按实际原因返回：磁盘已满或剩余空间不足、录像设备取流失败、接口服务未启动、录制进程或依赖服务启动失败、任务ID重复、教室已被占用、当前通道/教室已有录制任务、录制参数错误或其他原因。")
     data: MobileRecordStartData = Field(..., description="开始录制后的必要信息。")
 
 
@@ -194,7 +196,7 @@ class MobileRecordStartRequest(BaseModel):
     nvrChannelId: str = Field(default="", description="格式：string。通道ID标识，含义与 `/api/stream/open` 相同。可为空字符串；为空时边缘服务主要使用 nvrChannelNum 定位通道。示例：`cam_back_301`。")
     nvrChannelNum: int = Field(..., description="格式：int。业务通道号，含义与 `/api/stream/open` 相同；移动录制会录制这个通道。示例：`4`。")
     estimatedDurationSeconds: int = Field(default=1800, ge=60, description="格式：int，单位：秒。预计录制时长，最小 `60`，当前边缘服务会限制最大 6 小时。例如 `1800`=30分钟，`3600`=1小时。到达该时长后，边缘服务会自动结束录制。")
-    recordUserId: str = Field(..., description="格式：string。录制人ID。用于录制人占用判断；同一个录制人同一时间只允许一个进行中的录制任务。示例：`u_001`。")
+    recordUserId: str = Field(..., description="格式：string。录制人ID。用于日志、状态展示和回调；同一个录制人允许同时在不同教室发起多个录制任务。示例：`u_001`。")
     recordUserName: str = Field(default="", description="格式：string。录制人姓名。教室状态接口会返回这个字段，用于展示“谁正在录制”；没有姓名时可传空字符串。示例：`张老师`。")
     callbackUrl: str = Field(default="", description="格式：string，HTTP/HTTPS URL，可为空字符串。该字段已废弃，当前版本边缘服务会忽略它，并统一使用本机配置中的 `serverAddress` 自动拼接默认回调地址：`{serverAddress}/api/v1/record-task/callback`。保留这个字段仅用于兼容旧服务端。")
 
@@ -215,6 +217,34 @@ class MobileRecordStartRequest(BaseModel):
                 "recordUserId": "u_001",
                 "recordUserName": "张老师",
                 "callbackUrl": "",
+            }
+        }
+    }
+
+
+class MobileRecordScheduleRequest(MobileRecordStartRequest):
+    scheduledStartTime: str = Field(..., description="格式：string，ISO-8601 或 `yyyy-MM-dd HH:mm:ss`。预约录制开始时间。示例：`2026-06-26 17:00:00`。")
+    scheduledEndTime: str = Field(..., description="格式：string，ISO-8601 或 `yyyy-MM-dd HH:mm:ss`。预约录制结束时间，必须晚于 scheduledStartTime。示例：`2026-06-26 18:00:00`。")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "taskId": "record_20260626_1700_205",
+                "campusCode": "NJ",
+                "classroomId": "room_205",
+                "nvrDeviceId": 10001,
+                "ipAddress": "192.168.9.83",
+                "port": 554,
+                "account": "admin",
+                "password": "******",
+                "nvrChannelId": "cam_back_205",
+                "nvrChannelNum": 4,
+                "estimatedDurationSeconds": 3600,
+                "recordUserId": "u_001",
+                "recordUserName": "张老师",
+                "callbackUrl": "",
+                "scheduledStartTime": "2026-06-26 17:00:00",
+                "scheduledEndTime": "2026-06-26 18:00:00",
             }
         }
     }
@@ -337,11 +367,54 @@ def create_mobile_record_router(*, service) -> APIRouter:
             return "教室已被占用"
         if code == "CHANNEL_RECORDING_CONFLICT":
             return "当前通道/教室已有录制任务"
-        if code == "USER_RECORDING_CONFLICT":
-            return "录制人有进行中的录制任务"
         if code == "BAD_REQUEST":
             return "录制参数错误"
         return message or "其他原因"
+
+    def _parse_schedule_time(value: object) -> datetime:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("预约时间不能为空")
+        try:
+            return datetime.fromisoformat(text.replace(" ", "T").replace("Z", "+00:00"))
+        except Exception as exc:
+            raise ValueError(f"预约时间格式错误：{text}") from exc
+
+    async def _run_scheduled_start(payload: dict[str, Any], *, request_base_url: str, prewarm_delay_seconds: float, start_delay_seconds: float, prepare_seconds: int) -> None:
+        task_id = str(payload.get("taskId") or "")
+        if prewarm_delay_seconds > 0:
+            await asyncio.sleep(prewarm_delay_seconds)
+        if prepare_seconds > 0:
+            try:
+                _log.info(
+                    "SCHEDULE prewarm taskId=%s prepareSeconds=%s scheduledStartTime=%s",
+                    task_id,
+                    prepare_seconds,
+                    str(payload.get("scheduledStartTime") or ""),
+                )
+                await service.prewarm_recording_session(payload)
+            except Exception as exc:
+                _log.warning("SCHEDULE prewarm failed taskId=%s message=%s", task_id, exc)
+        remaining = max(0.0, float(start_delay_seconds or 0.0) - max(0.0, float(prewarm_delay_seconds or 0.0)))
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+        try:
+            _log.info(
+                "SCHEDULE trigger taskId=%s scheduledStartTime=%s scheduledEndTime=%s estimatedDurationSeconds=%s",
+                task_id,
+                str(payload.get("scheduledStartTime") or ""),
+                str(payload.get("scheduledEndTime") or ""),
+                payload.get("estimatedDurationSeconds"),
+            )
+            ok, data, status = await service.start_recording(payload, request_base_url=request_base_url)
+            if not ok:
+                message = _service_start_failure_message(str(data.get("code") or ""), str(data.get("message") or ""))
+                _queue_start_failure_callback(payload, message)
+                _log.warning("SCHEDULE start failed taskId=%s status_code=%s message=%s", task_id, status, message)
+        except Exception as exc:
+            message = "录像设备取流失败" if _is_network_error(exc) else f"其他原因：{exc}"
+            _queue_start_failure_callback(payload, message)
+            _log.warning("SCHEDULE start exception taskId=%s message=%s", task_id, message)
 
     def _stop_message(action: str, ok: bool, data: dict[str, Any]) -> str:
         if ok:
@@ -508,21 +581,102 @@ def create_mobile_record_router(*, service) -> APIRouter:
             return response
 
     @router.post(
+        "/api/mobile-record/schedule",
+        summary="预约移动录制",
+        description=(
+            "创建预约录制任务。请求字段与 `/api/mobile-record/start` 基本一致，额外传 `scheduledStartTime` 和 `scheduledEndTime`。\n\n"
+            "默认提前准备时间：`3 秒`。如果预约开始时间距离当前时间大于 3 秒，边缘服务会在开始前 3 秒预热实时流，但不会提前写入 HLS 文件；如果距离小于等于 3 秒，会立即启动录制。\n"
+            "到点后会复用 `/api/mobile-record/start` 的正式录制流程，录制真正开始后回调 `status=recording`，失败时回调 `status=failed`。"
+        ),
+    )
+    async def api_mobile_record_schedule(req: MobileRecordScheduleRequest, request: Request):
+        payload = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+        client_ip = request.client.host if request.client else ""
+        payload["__clientIp"] = str(client_ip or "")
+        try:
+            start_dt = _parse_schedule_time(payload.get("scheduledStartTime"))
+            end_dt = _parse_schedule_time(payload.get("scheduledEndTime"))
+            if end_dt <= start_dt:
+                response = _json(code="FAILED", message="预约参数错误：scheduledEndTime 必须晚于 scheduledStartTime", status_code=400)
+                _log_response("SCHEDULE response", request, code="FAILED", message="预约参数错误：scheduledEndTime 必须晚于 scheduledStartTime", status_code=response.status_code, taskId=str(payload.get("taskId") or ""))
+                return response
+            duration_seconds = int((end_dt - start_dt).total_seconds())
+            payload["estimatedDurationSeconds"] = max(60, min(duration_seconds, 6 * 3600))
+            now_dt = datetime.now(start_dt.tzinfo) if start_dt.tzinfo else datetime.now()
+            start_delay_seconds = max(0.0, (start_dt - now_dt).total_seconds())
+            prepare_seconds = SCHEDULE_PREPARE_SECONDS if start_delay_seconds > SCHEDULE_PREPARE_SECONDS else 0
+            prewarm_delay_seconds = max(0.0, start_delay_seconds - prepare_seconds)
+            _log_request(
+                "SCHEDULE request",
+                request,
+                taskId=str(payload.get("taskId") or ""),
+                classroomId=str(payload.get("classroomId") or ""),
+                nvrDeviceId=payload.get("nvrDeviceId"),
+                nvrIp=str(payload.get("ipAddress") or ""),
+                nvrPort=payload.get("port"),
+                nvrChannelId=str(payload.get("nvrChannelId") or ""),
+                nvrChannelNum=payload.get("nvrChannelNum"),
+                recordUserId=str(payload.get("recordUserId") or ""),
+                scheduledStartTime=str(payload.get("scheduledStartTime") or ""),
+                scheduledEndTime=str(payload.get("scheduledEndTime") or ""),
+                prepareSeconds=prepare_seconds,
+                prewarmDelaySeconds=int(prewarm_delay_seconds),
+                startDelaySeconds=int(start_delay_seconds),
+            )
+            asyncio.create_task(
+                _run_scheduled_start(
+                    payload,
+                    request_base_url=_base_url(request),
+                    prewarm_delay_seconds=prewarm_delay_seconds,
+                    start_delay_seconds=start_delay_seconds,
+                    prepare_seconds=prepare_seconds,
+                )
+            )
+            data = {
+                "taskId": str(payload.get("taskId") or ""),
+                "scheduledStartTime": str(payload.get("scheduledStartTime") or ""),
+                "scheduledEndTime": str(payload.get("scheduledEndTime") or ""),
+                "estimatedDurationSeconds": int(payload.get("estimatedDurationSeconds") or 0),
+                "prepareSeconds": prepare_seconds,
+                "prewarmDelaySeconds": int(prewarm_delay_seconds),
+                "startDelaySeconds": int(start_delay_seconds),
+            }
+            response = _json(data, code="SUCCESS", message="预约成功")
+            _log_response("SCHEDULE response", request, code="SUCCESS", message="预约成功", status_code=response.status_code, taskId=str(payload.get("taskId") or ""), prepareSeconds=prepare_seconds, startDelaySeconds=int(start_delay_seconds))
+            return response
+        except ValueError as exc:
+            message = f"预约参数错误：{exc}"
+            response = _json(code="FAILED", message=message, status_code=400)
+            _log_response("SCHEDULE response", request, code="FAILED", message=message, status_code=response.status_code, taskId=str(payload.get("taskId") or ""))
+            return response
+        except Exception as exc:
+            message = f"预约失败：{exc}"
+            response = _json(code="FAILED", message=message, status_code=500)
+            _log_response("SCHEDULE response", request, code="FAILED", message=message, status_code=response.status_code, taskId=str(payload.get("taskId") or ""))
+            return response
+
+    @router.post(
         "/api/mobile-record/start",
         summary="开始移动录制",
         response_model=MobileRecordStartResponse,
         description=(
             "服务端下发开始录制指令。NVR 连接字段与 `/api/stream/open` 保持一致；区别是本接口会启动独立 ffmpeg 进程录制 HLS，"
-            "而不是返回实时预览流。边缘服务会在点击开始这一刻再次校验教室和录制人是否已被占用。\n\n"
+            "而不是返回实时预览流。边缘服务会在点击开始这一刻再次校验教室和物理通道是否已被占用。\n\n"
             "业务约束：\n"
             "- 同一教室同一时刻只能有一个进行中的录制任务。\n"
-            "- 同一录制人同一时刻只能有一个进行中的录制任务。\n"
+            "- 同一个 NVR 设备和通道同一时刻只能有一个进行中的录制任务。\n"
+            "- 同一录制人允许同时在不同教室发起多个录制任务。\n"
             "- `estimatedDurationSeconds` 单位是秒，到时后边缘服务自动结束录制。\n"
             "- `callbackUrl` 字段已废弃，当前版本会忽略该入参；边缘服务统一使用本机配置中的 `serverAddress` 自动拼接默认回调地址：`{serverAddress}/api/v1/record-task/callback`。\n"
             "- 输出格式固定为 HLS，`playUrl` 在完成后可直接给 H5 播放。\n\n"
+            "启动成功判定：\n"
+            "- 边缘服务启动 ffmpeg 后，会先进入内部 `starting` 状态并占用教室、通道和录制人。\n"
+            "- 边缘服务会读取 ffmpeg 进度输出，确认 ffmpeg 已经开始处理媒体包后，接口返回 `SUCCESS`，任务状态变为 `recording`，并立即回调服务端 `status=recording`。\n"
+            "- 该判断不等待 10 秒 HLS 分片完整产出；如果短时间内没有明确进度但 ffmpeg 进程稳定运行，会先进入 `recording`，后续由 HLS 生成和自动结束校验继续兜住结果。\n\n"
             "自动结束与回调：\n"
-            "- start 成功后，边缘服务会记录 `maxEndTime = startTime + estimatedDurationSeconds`。\n"
+            "- start 成功后，边缘服务会记录 `maxEndTime = 媒体确认开始时间 + estimatedDurationSeconds`。\n"
             "- 边缘服务内部有调度器约每 5 秒检查一次到期任务；如果到达预计录制时间仍未手动结束，会自动按 `finish` 结束录制。\n"
+            "- 自动结束时会优先校验 HLS 实际可播放时长；如果只差几秒，会短暂延后停止，尽量保证最终可播放时长达到预计时长。\n"
             "- 自动结束时 `stopReason=auto_timeout`，该值只会出现在边缘服务回调服务端的结果里，不需要也不允许服务端调用 stop 时传入。\n"
             "- 只要本机已配置 `serverAddress`，开始成功、启动失败、自动结束、人工结束、取消、失败或中断后，边缘服务都会主动 POST 到默认回调地址，服务端不需要再次调用 stop。\n\n"
             "callbackUrl 回调 payload 字段格式：\n"
@@ -547,7 +701,7 @@ def create_mobile_record_router(*, service) -> APIRouter:
             "- `SUCCESS`：启动录制成功，message 固定为“启动录制成功”。\n"
             "- `FAILED`：启动录制失败。\n\n"
             "message 场景：\n"
-            "- `启动录制成功`：录制任务已创建，边缘服务已开始录制。\n"
+            "- `启动录制成功`：录制任务已创建，并且已经检测到 HLS 媒体开始写入。\n"
             "- `磁盘已满或剩余空间不足`：录制目录所在磁盘空间不足，无法继续写入 HLS 文件。\n"
             "- `录像设备取流失败`：录像设备无法建立实时流、RTSP 地址不可用、网络超时或无法输出首包。\n"
             "- `接口服务未启动`：边缘服务接口不可访问。说明：如果请求已经到达本接口，通常不会由本接口返回该提示。\n"
@@ -555,7 +709,6 @@ def create_mobile_record_router(*, service) -> APIRouter:
             "- `任务ID重复`：taskId 已存在，不能重复启动同一个录制任务。\n"
             "- `教室已被占用`：classroomId 对应教室已有进行中的录制任务。\n"
             "- `当前通道/教室已有录制任务`：同一个 NVR 设备和通道已有进行中的录制任务，用于防止前端传错 classroomId 时同一物理教室被重复录制。\n"
-            "- `录制人有进行中的录制任务`：recordUserId 已有另一个进行中的录制任务。\n"
             "- `录制参数错误：实际错误信息`：必要参数缺失或参数不合法。\n"
             "- `其他原因：实际错误信息`：未归类的启动失败。"
         ),

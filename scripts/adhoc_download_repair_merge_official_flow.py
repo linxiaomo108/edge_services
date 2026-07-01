@@ -75,6 +75,8 @@ from edge_service.tasks.camera import (  # noqa: E402
     _download_part_merge_ready_issue_for_batch_policy,
     _format_structural_media_metrics,
     _normalize_download_part,
+    _rebuild_nvr_skew_merged_audio_from_raw_parts,
+    _rebuild_nvr_skew_merged_by_raw_video_duration,
     _segment_estimated_bps,
     _segment_estimated_bytes_per_sec,
     _segment_ranges,
@@ -749,6 +751,36 @@ def _process_and_merge(
     merge_elapsed = time.perf_counter() - merge_start
     print(f"  merge_elapsed={_fmt_elapsed(merge_elapsed)}")
     print(f"  merge_temp_files={len(temp_files)}")
+
+    if batch_policy.name == "nvr_pts_skew_same_origin":
+        print("\n===== rebuild merged audio from raw parts =====")
+        merged_base_out = final_out
+        nvr_audio_merged = final_out.with_name(final_out.stem + ".nvrskew_audio.mp4")
+        audio_rebuild_start = time.perf_counter()
+        audio_rebuild_ok = _rebuild_nvr_skew_merged_audio_from_raw_parts(final_out, parts, nvr_audio_merged)
+        audio_rebuild_elapsed = time.perf_counter() - audio_rebuild_start
+        print(f"  audio_rebuild_ok={audio_rebuild_ok}")
+        print(f"  audio_rebuild_elapsed={_fmt_elapsed(audio_rebuild_elapsed)}")
+        if not audio_rebuild_ok or not nvr_audio_merged.exists() or nvr_audio_merged.stat().st_size <= 0:
+            print("  audio rebuild failed, fallback to raw-video-duration rebuild")
+            fallback_out = final_out.with_name(final_out.stem + ".nvrskew_video_duration.mp4")
+            fallback_start = time.perf_counter()
+            fallback_ok, fallback_temp_files = _rebuild_nvr_skew_merged_by_raw_video_duration(parts, fallback_out)
+            fallback_elapsed = time.perf_counter() - fallback_start
+            print(f"  fallback_ok={fallback_ok}")
+            print(f"  fallback_elapsed={_fmt_elapsed(fallback_elapsed)}")
+            temp_files.extend(fallback_temp_files)
+            if not fallback_ok or not fallback_out.exists() or fallback_out.stat().st_size <= 0:
+                raise RuntimeError(f"nvr_skew_audio_rebuild_failed:{nvr_audio_merged}")
+            nvr_audio_merged = fallback_out
+        temp_files.append(final_out)
+        try:
+            merged_base_out.unlink(missing_ok=True)
+        except Exception:
+            pass
+        nvr_audio_merged.replace(merged_base_out)
+        final_out = merged_base_out
+
     if not KEEP_MERGE_TEMP:
         cleaned = 0
         for path in temp_files:

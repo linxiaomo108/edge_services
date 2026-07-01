@@ -108,6 +108,8 @@ CAM_DL_NORM_082 = "CAM-DL-NORM-082"
 CAM_DL_NORM_083 = "CAM-DL-NORM-083"
 # CAM-DL-NORM-084: 断电/中断类异常长时间轴，按真实视频时长 copy video + 修音频，避免按异常长时间轴重建。
 CAM_DL_NORM_084 = "CAM-DL-NORM-084"
+# CAM-DL-NORM-085: 稳定绝对时间轴 audio_early，音视频内容同源同步，仅归零两条流时间轴。
+CAM_DL_NORM_085 = "CAM-DL-NORM-085"
 
 # CAM-DL-SRC-010: 源视频时间线异常或强制校准，执行源视频时间线重建。
 CAM_DL_SRC_010 = "CAM-DL-SRC-010"
@@ -1820,6 +1822,144 @@ def _can_zero_based_copy_to_mp4(src: Path) -> bool:
     return not audio_codec or _audio_copy_to_mp4_allowed(audio_codec)
 
 
+def _stable_absolute_audio_early_rebase_copy_part(
+    raw_part: Path,
+    output_path: Path,
+    *,
+    precise_state: dict[str, float | bool | str],
+    source_metrics: dict[str, float],
+    on_status: Callable[[str], None] | None = None,
+    cancel_check: Callable[[], str | None] | None = None,
+) -> str:
+    """7772 类场景：内容同步但挂在大绝对 PTS 上，只归零流时间轴，不推迟音频。"""
+    log = logging.getLogger("edge.runner")
+    if not raw_part.exists() or raw_part.stat().st_size <= 0:
+        return "raw_missing_or_empty"
+    if not ffmpeg_exists():
+        return "ffmpeg_missing"
+    classification = str(precise_state.get("classification") or "").strip()
+    if classification != "audio_early":
+        return f"classification_not_audio_early:{classification or 'unknown'}"
+    if "packet_disorder" in classification.lower():
+        return "audio_packet_timeline_disorder"
+    video_start = float(precise_state.get("video_start") or 0.0)
+    audio_start = float(precise_state.get("audio_start") or 0.0)
+    media_start = float(source_metrics.get("media_start") or min(video_start, audio_start))
+    start_gap = audio_start - video_start
+    audio_early_by = max(0.0, -start_gap)
+    video_duration = float(source_metrics.get("video_duration") or precise_state.get("video_duration") or 0.0)
+    audio_duration = float(source_metrics.get("audio_duration") or precise_state.get("audio_duration") or 0.0)
+    if not _has_abnormal_absolute_timeline_start(media_start, video_start, audio_start):
+        return f"absolute_start_not_abnormal:media={media_start:.3f}:video={video_start:.3f}:audio={audio_start:.3f}"
+    if not (AUDIO_EARLY_ALIGN_THRESHOLD_SECONDS < audio_early_by <= 8.0):
+        return f"audio_early_gap_out_of_range:{audio_early_by:.3f}"
+    if video_duration <= 0.0 or audio_duration <= 0.0:
+        return f"missing_duration:video={video_duration:.3f}:audio={audio_duration:.3f}"
+    if abs(video_duration - audio_duration) > max(1.0, audio_early_by + 0.5):
+        return f"duration_delta_large:video={video_duration:.3f}:audio={audio_duration:.3f}:gap={audio_early_by:.3f}"
+    if not _can_zero_based_copy_to_mp4(raw_part):
+        audio_info = probe_audio_stream_info(str(raw_part))
+        return f"audio_codec_not_copy_allowed:{audio_info.get('codec_name') or 'unknown'}"
+
+    tmp_out = output_path.with_name(output_path.stem + ".stableaudioearly.tmp.mp4")
+    try:
+        tmp_out.unlink(missing_ok=True)
+    except Exception:
+        pass
+    cmd = [
+        _ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(raw_part),
+        "-map", "0:v:0", "-map", "0:a:0?",
+        "-c", "copy",
+        "-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTDTS",
+        "-bsf:a", "setts=pts=PTS-STARTPTS:dts=DTS-STARTDTS",
+        "-avoid_negative_ts", "make_zero",
+        "-reset_timestamps", "1",
+        "-fflags", "+genpts",
+        "-movflags", "+faststart",
+        str(tmp_out),
+    ]
+    if on_status:
+        on_status("命中稳定绝对时间轴音频早到场景，正在轻量归零两条流时间轴")
+    started = time.perf_counter()
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+        )
+    except Exception as e:
+        return f"ffmpeg_exception:{e}"
+    elapsed = time.perf_counter() - started
+    if cancel_check:
+        cancel_mode = cancel_check()
+        if cancel_mode in {"pause", "stop"}:
+            try:
+                tmp_out.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise RuntimeError(f"cancelled:{cancel_mode}")
+    if proc.returncode != 0:
+        try:
+            tmp_out.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return f"ffmpeg_failed:rc={proc.returncode}:tail={(proc.stdout or '')[-800:]}"
+    if not tmp_out.exists() or tmp_out.stat().st_size <= 0:
+        return "output_missing"
+    validation_issue = _validate_download_part_rebuild_output(tmp_out, include_packet_metrics=False)
+    if not validation_issue:
+        validation_issue = _download_part_merge_ready_issue_with_options(
+            tmp_out,
+            include_packet_metrics=False,
+            defer_precise_probe_until_suspicious=True,
+            deferred_start_gap_tolerance_seconds=DOWNLOAD_PART_REBUILD_START_GAP_TOLERANCE_SECONDS,
+        )
+    if validation_issue:
+        try:
+            tmp_out.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return f"validation_failed:{validation_issue}"
+    out_metrics = _collect_structural_media_metrics(tmp_out, include_packet_metrics=False)
+    out_video_duration = float(out_metrics.get("video_duration") or 0.0)
+    if video_duration > 0.0 and abs(out_video_duration - video_duration) > 1.0:
+        try:
+            tmp_out.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return f"video_duration_changed:src={video_duration:.3f}:out={out_video_duration:.3f}"
+    try:
+        _replace_file_or_raise_finalize_pending(
+            tmp_out,
+            output_path,
+            log=log,
+            action=f"download part stable absolute audio early rebase {raw_part.name} -> {output_path.name}",
+            user_message="稳定绝对时间轴轻量归零完成，正在等待最终提交",
+        )
+    except FinalizePendingError:
+        raise
+    except Exception as e:
+        try:
+            tmp_out.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return f"finalize_failed:{e}"
+    log.info(
+        "%s 分段 %s 稳定绝对时间轴 audio_early 轻量归零完成 audio_early_by=%.3fs elapsed=%.3fs metrics=%s out=%s",
+        _branch_code_tag(CAM_DL_NORM_085),
+        raw_part.name,
+        audio_early_by,
+        elapsed,
+        _format_structural_media_metrics(out_metrics),
+        str(output_path),
+    )
+    return ""
+
+
 def _copy_video_audio_early_pcm_repair_part(
     raw_part: Path,
     output_path: Path,
@@ -2515,6 +2655,47 @@ def _normalize_download_part(
             "%s 分段 %s 源分段未检测到音频流，后续按 video-only 时间线修复处理，不进入音频轻量修复分支",
             _branch_code_tag(CAM_DL_NORM_010),
             part_path.name,
+        )
+    if absolute_start_abnormal and not source_has_no_audio_stream:
+        normalized_part = _normalized_part_output_path(part_path)
+        stable_audio_early_reason = _stable_absolute_audio_early_rebase_copy_part(
+            part_path,
+            normalized_part,
+            precise_state=precise_state,
+            source_metrics={
+                "media_start": media_start,
+                "video_duration": video_duration,
+                "audio_duration": audio_duration,
+                "video_start": video_start,
+                "audio_start": audio_start,
+            },
+            on_status=on_status,
+            cancel_check=cancel_check,
+        )
+        if not stable_audio_early_reason:
+            log.info(
+                "%s 分段 %s 稳定绝对时间轴 audio_early 归零 copy 路径验收通过，跳过 systrans/080/010 重建 coarse_gap=%.3fs",
+                _branch_code_tag(CAM_DL_NORM_085),
+                part_path.name,
+                audio_early_by,
+            )
+            return DownloadPartNormalizeResult(
+                duration_sec=float(probe_duration_seconds(str(normalized_part)) or 0.0),
+                force_canonical_merge=False,
+                canonicalize_merge_part=False,
+                merge_risk_level=0,
+                normalize_reason=f"stable_absolute_audio_early_rebase_copy:gap={audio_early_by:.3f}",
+                merge_part_path=str(normalized_part),
+                classification="stable_absolute_audio_early",
+            )
+        if stable_audio_early_reason.startswith("cancelled:"):
+            raise RuntimeError(stable_audio_early_reason)
+        log.info(
+            "%s 分段 %s 稳定绝对时间轴 audio_early 归零 copy 路径未命中或未通过，继续原流程 reason=%s classification=%s",
+            _branch_code_tag(CAM_DL_NORM_085),
+            part_path.name,
+            stable_audio_early_reason,
+            precise_classification or "unknown",
         )
     if nvr_pts_skew_same_origin:
         systrans_part = _systrans_part_output_path(part_path)
@@ -4340,42 +4521,58 @@ def _rebuild_nvr_skew_merged_audio_from_raw_parts(clean_video_path: Path, raw_pa
     if not existing_parts:
         return False
     tmp_out = output_path.with_name(output_path.stem + ".nvrskew_audio.tmp.mp4")
+    work_prefix = output_path.with_suffix("")
+    temp_files: list[Path] = []
     try:
         tmp_out.unlink(missing_ok=True)
         output_path.unlink(missing_ok=True)
     except Exception:
         pass
-    cmd: list[str] = [_ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "warning", "-i", str(clean_video_path)]
-    for part in existing_parts:
-        cmd.extend(["-i", str(part)])
-    filter_parts: list[str] = []
-    labels: list[str] = []
-    for idx in range(1, len(existing_parts) + 1):
-        label = f"a{idx}"
-        filter_parts.append(
-            f"[{idx}:a:0]aresample=async=1:first_pts=0,"
-            f"aformat=sample_fmts=fltp:channel_layouts=mono:sample_rates=32000,"
-            f"asetpts=PTS-STARTPTS[{label}]"
-        )
-        labels.append(f"[{label}]")
-    filter_parts.append(
-        "".join(labels)
-        + f"concat=n={len(labels)}:v=0:a=1,atrim=0:{target_duration:.6f},asetpts=PTS-STARTPTS[aout]"
-    )
-    cmd.extend([
-        "-filter_complex", ";".join(filter_parts),
-        "-map", "0:v:0",
-        "-map", "[aout]",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-ar", "32000",
-        "-ac", "1",
-        "-b:a", "96k",
-        "-movflags", "+faststart",
-        str(tmp_out),
-    ])
     log = logging.getLogger("edge.runner")
     try:
+        audio_parts: list[Path] = []
+        for idx, part in enumerate(existing_parts, start=1):
+            timings = probe_stream_timings(str(part))
+            video_timing = timings.get("video") or {}
+            duration_sec = float(video_timing.get("duration") or 0.0)
+            if duration_sec <= 0.0:
+                duration_sec = float(probe_authoritative_duration_seconds(str(part)) or 0.0)
+            if duration_sec <= 0.0:
+                duration_sec = float(probe_duration_seconds(str(part)) or 0.0)
+            if duration_sec <= 0.0:
+                raise RuntimeError(f"bad_part_video_duration:{part.name}")
+            audio_part = output_path.with_name(f"{work_prefix.name}.part{idx:03d}.audio_norm.m4a")
+            temp_files.append(audio_part)
+            if not _extract_nvr_skew_audio_part_for_duration(part, audio_part, min(duration_sec, target_duration)):
+                raise RuntimeError(f"audio_extract_failed:{part.name}")
+            audio_parts.append(audio_part)
+        merged_audio = output_path.with_name(f"{work_prefix.name}.audio_merged.m4a")
+        temp_files.append(merged_audio)
+        if not _concat_copy_media_files(audio_parts, merged_audio):
+            raise RuntimeError("audio_concat_failed")
+        cmd = [
+            _ffmpeg_bin(),
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-i",
+            str(clean_video_path),
+            "-i",
+            str(merged_audio),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "copy",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+            str(tmp_out),
+        ]
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="ignore")
         issue = _probe_structural_media_issue(tmp_out)
         if issue:
@@ -4397,6 +4594,12 @@ def _rebuild_nvr_skew_merged_audio_from_raw_parts(clean_video_path: Path, raw_pa
         except Exception:
             pass
         return False
+    finally:
+        for path in temp_files:
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 def _nvr_skew_expected_video_duration(raw_part_paths: list[Path]) -> float:
@@ -8939,30 +9142,38 @@ async def run_camera_task(raw: dict[str, Any], simulate: bool, on_progress) -> l
                 "source": str(tmp_merged),
                 "output": str(nvr_audio_merged),
             })
+            high_risk_reason = ""
             if nvr_audio_ok:
                 high_risk_reason = await asyncio.to_thread(_nvr_skew_output_high_risk, nvr_audio_merged, part_paths)
-                if high_risk_reason:
-                    nvr_video_duration_merged = out_dir / f"{prefix}_{server_task_id}.merged.nvrskew_video_duration.mp4"
-                    nvr_video_duration_ok, nvr_video_duration_temp_files = await asyncio.to_thread(
-                        _run_with_status_heartbeat,
-                        "检测到NVR固定PTS偏移高风险输出，正在按分段视频真实时长重建",
-                        lambda: _rebuild_nvr_skew_merged_by_raw_video_duration(part_paths, nvr_video_duration_merged),
-                        lambda msg: on_progress("DOWNLOAD", 0.978, msg),
-                        _download_total_elapsed_seconds,
-                    )
-                    merge_temp_files.extend(nvr_video_duration_temp_files)
-                    _record_phase5_observation({
-                        "phase": "merge",
-                        "event": "nvr_pts_skew_high_risk_fallback",
-                        "ok": bool(nvr_video_duration_ok),
-                        "reason": high_risk_reason,
-                        "policy": download_batch_av_policy.name,
-                        "source": str(nvr_audio_merged),
-                        "output": str(nvr_video_duration_merged),
-                    })
-                    if nvr_video_duration_ok:
+            else:
+                high_risk_reason = "audio_rebuild_failed"
+            if high_risk_reason:
+                nvr_video_duration_merged = out_dir / f"{prefix}_{server_task_id}.merged.nvrskew_video_duration.mp4"
+                nvr_video_duration_ok, nvr_video_duration_temp_files = await asyncio.to_thread(
+                    _run_with_status_heartbeat,
+                    "检测到NVR固定PTS偏移高风险输出，正在按分段视频真实时长重建",
+                    lambda: _rebuild_nvr_skew_merged_by_raw_video_duration(part_paths, nvr_video_duration_merged),
+                    lambda msg: on_progress("DOWNLOAD", 0.978, msg),
+                    _download_total_elapsed_seconds,
+                )
+                merge_temp_files.extend(nvr_video_duration_temp_files)
+                _record_phase5_observation({
+                    "phase": "merge",
+                    "event": "nvr_pts_skew_high_risk_fallback",
+                    "ok": bool(nvr_video_duration_ok),
+                    "reason": high_risk_reason,
+                    "policy": download_batch_av_policy.name,
+                    "source": str(nvr_audio_merged if nvr_audio_ok else tmp_merged),
+                    "output": str(nvr_video_duration_merged),
+                })
+                if nvr_video_duration_ok:
+                    if nvr_audio_ok:
                         merge_temp_files.append(nvr_audio_merged)
-                        nvr_audio_merged = nvr_video_duration_merged
+                    nvr_audio_merged = nvr_video_duration_merged
+                    nvr_audio_ok = True
+                elif not nvr_audio_ok:
+                    raise RuntimeError(f"nvr_pts_skew_audio_rebuild_failed:{high_risk_reason}")
+            if nvr_audio_ok:
                 merge_temp_files.append(tmp_merged)
                 tmp_merged = nvr_audio_merged
         await asyncio.to_thread(

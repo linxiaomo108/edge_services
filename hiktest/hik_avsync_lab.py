@@ -43,9 +43,9 @@ ONLINE_SDK_PROBE_SECONDS = 6  # 通道探测时每个候选下载观察的秒数
 ONLINE_DOWNLOAD_STALL_TIMEOUT_SEC = 180  # 下载卡住判定秒数；超过该时长没有进度则认为本段下载异常。
 
 # 本地模式参数：已有源分段验证时，改这里。
-LOCAL_EXISTING_RAW_DIR = r"E:\Videos\2026-06-06\nj"
-LOCAL_RAW_GLOB = "*.mp4"
-LOCAL_EXISTING_START_TIME = "2026-06-06 15:20:00"
+LOCAL_EXISTING_RAW_DIR = r"E:\Project\SmartCampus-school\edge_services"
+LOCAL_RAW_GLOB = "1月15日.mp4"
+LOCAL_EXISTING_START_TIME = "2025-12-12 18:29:20"
 LOCAL_SOURCE_LINK_MODE = "copy"  # hardlink 或 copy
 
 # 实验输出和依赖目录。当前先保留 sdk/Dll 的重复文件，实验稳定后再做去重。
@@ -1830,6 +1830,39 @@ def generate_player(report: dict[str, Any], output_dir: Path) -> None:
             if path.exists():
                 method_label = f" [{seg.get(method_key)}]" if method_key and seg.get(method_key) else ""
                 videos.append({"title": f"part{seg.get('index'):03d} {title}{method_label}", "url": path.relative_to(output_dir).as_posix(), "probe": seg.get(probe_key, {})})
+    cards = []
+    for idx, item in enumerate(videos):
+        title = str(item["title"])
+        url = str(item["url"])
+        probe_json = json.dumps(item.get("probe") or {}, ensure_ascii=False, indent=2)
+        cards.append(f"""
+<section class="card">
+  <h2>{title}</h2>
+  <video controls preload="metadata" src="{url}"></video>
+  <details class="sync-lab">
+    <summary>播放器式声画校正验证</summary>
+    <div class="sync-player" data-src="{url}" data-index="{idx}">
+      <video class="sync-video" controls preload="metadata" src="{url}" muted></video>
+      <audio class="sync-audio" preload="metadata" src="{url}"></audio>
+      <div class="controls">
+        <label>音频偏移 <output class="offset-value">0.00s</output></label>
+        <input class="offset-slider" type="range" min="-5" max="5" value="0" step="0.05">
+        <div class="buttons">
+          <button type="button" class="sync-start">开始同步播放</button>
+          <button type="button" data-offset="-2">-2s</button>
+          <button type="button" data-offset="-1">-1s</button>
+          <button type="button" data-offset="-0.5">-0.5s</button>
+          <button type="button" data-offset="0">0</button>
+          <button type="button" data-offset="0.5">+0.5s</button>
+          <button type="button" data-offset="1">+1s</button>
+          <button type="button" data-offset="2">+2s</button>
+        </div>
+        <p class="hint">正数表示声音延后，负数表示声音提前。这个播放器只用于验证，不改写视频文件。</p>
+      </div>
+    </div>
+  </details>
+  <pre>{probe_json}</pre>
+</section>""")
     html = f"""<!doctype html>
 <html lang=\"zh-CN\">
 <head>
@@ -1844,6 +1877,15 @@ video {{ width: 100%; max-height: 70vh; background: #000; border-radius: 10px; }
 pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #020617; padding: 12px; border-radius: 10px; color: #cbd5e1; }}
 a {{ color: #38bdf8; }}
 .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }}
+.sync-lab {{ margin: 12px 0; }}
+.sync-lab summary {{ cursor: pointer; color: #bae6fd; font-weight: 600; }}
+.sync-player {{ margin-top: 12px; padding: 12px; border: 1px solid #1e293b; border-radius: 12px; background: #0b1120; }}
+.sync-player .sync-video {{ display: block; margin-bottom: 10px; }}
+.controls {{ display: grid; gap: 10px; }}
+.offset-slider {{ width: 100%; }}
+.buttons {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+.buttons button {{ color: #e2e8f0; background: #1e293b; border: 1px solid #475569; border-radius: 8px; padding: 6px 10px; cursor: pointer; }}
+.hint {{ margin: 0; color: #94a3b8; font-size: 13px; }}
 </style>
 </head>
 <body>
@@ -1851,9 +1893,81 @@ a {{ color: #38bdf8; }}
 <h1>Hikvision AV Sync Lab</h1>
 <p>报告文件：<a href=\"report.json\">report.json</a></p>
 <div class=\"grid\">
-{''.join(f'<section class="card"><h2>{item["title"]}</h2><video controls preload="metadata" src="{item["url"]}"></video><pre>{json.dumps(item.get("probe") or {}, ensure_ascii=False, indent=2)}</pre></section>' for item in videos)}
+{''.join(cards)}
 </div>
 </main>
+<script>
+function clamp(value, min, max) {{
+  return Math.min(max, Math.max(min, value));
+}}
+
+document.querySelectorAll('.sync-player').forEach((root) => {{
+  const video = root.querySelector('.sync-video');
+  const audio = root.querySelector('.sync-audio');
+  const slider = root.querySelector('.offset-slider');
+  const value = root.querySelector('.offset-value');
+  const startButton = root.querySelector('.sync-start');
+  let offset = Number(slider.value || 0);
+  let syncing = false;
+
+  function targetAudioTime() {{
+    return clamp(video.currentTime - offset, 0, Math.max(audio.duration || video.duration || 0, 0));
+  }}
+
+  function syncAudio(force) {{
+    if (!audio.duration && !video.duration) return;
+    const target = targetAudioTime();
+    if (force || Math.abs((audio.currentTime || 0) - target) > 0.12) {{
+      syncing = true;
+      audio.currentTime = target;
+      syncing = false;
+    }}
+    audio.playbackRate = video.playbackRate || 1;
+  }}
+
+  function setOffset(next) {{
+    offset = Number(next || 0);
+    slider.value = String(offset);
+    value.textContent = offset.toFixed(2) + 's';
+    syncAudio(true);
+  }}
+
+  async function startBoth() {{
+    video.muted = true;
+    syncAudio(true);
+    await video.play();
+    try {{
+      await audio.play();
+    }} catch (err) {{
+      console.warn('sync audio play failed', err);
+    }}
+    syncAudio(true);
+  }}
+
+  slider.addEventListener('input', () => setOffset(slider.value));
+  startButton.addEventListener('click', () => {{
+    startBoth().catch((err) => console.warn('sync playback start failed', err));
+  }});
+  root.querySelectorAll('button[data-offset]').forEach((button) => {{
+    button.addEventListener('click', () => setOffset(button.dataset.offset));
+  }});
+  video.addEventListener('play', () => {{
+    syncAudio(true);
+    audio.play().catch(() => {{}});
+  }});
+  video.addEventListener('pause', () => audio.pause());
+  video.addEventListener('seeking', () => syncAudio(true));
+  video.addEventListener('ratechange', () => syncAudio(false));
+  video.addEventListener('timeupdate', () => syncAudio(false));
+  audio.addEventListener('seeking', () => {{
+    if (!syncing) syncAudio(true);
+  }});
+  setInterval(() => {{
+    if (!video.paused) syncAudio(false);
+  }}, 250);
+  setOffset(0);
+}});
+</script>
 </body>
 </html>"""
     (output_dir / "index.html").write_text(html, encoding="utf-8")

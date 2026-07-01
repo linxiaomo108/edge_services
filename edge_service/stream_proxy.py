@@ -138,7 +138,7 @@ def _probe_rtsp_url_with_fallback(
                 main_stream=main_stream,
                 provider=provider,
             )
-            _log.info("stream rtsp probe try: port=%s attempt=%s/3 total_attempt=%s url=%s", rtsp_port, attempt, attempt_seq, rtsp_url)
+            _log.debug("stream rtsp probe try: port=%s attempt=%s/3 total_attempt=%s url=%s", rtsp_port, attempt, attempt_seq, rtsp_url)
             try:
                 _probe_rtsp_url(rtsp_url)
                 return rtsp_url, rtsp_port
@@ -203,7 +203,7 @@ def _verify_cached_playable_rtsp_url(
         main_stream=(str(actual_stream_profile or "main").strip().lower() != "sub"),
         provider=provider,
     )
-    _log.info("stream rtsp cache verify: provider=%s channel=%s rtsp_port=%s profile=%s url=%s", provider, channel, rtsp_port, actual_stream_profile, rtsp_url)
+    _log.debug("stream rtsp cache verify: provider=%s channel=%s rtsp_port=%s profile=%s url=%s", provider, channel, rtsp_port, actual_stream_profile, rtsp_url)
     _probe_mpegts_first_chunk(rtsp_url, timeout_sec=8.0)
     return rtsp_url
 
@@ -273,6 +273,46 @@ class StreamSessionManager:
         except Exception:
             return default
         return result if result > 0 else default
+
+    def _find_reusable_session_before_probe_locked(
+        self,
+        *,
+        campus_code: str,
+        nvr_device_id: int,
+        nvr_channel_num: int,
+        nvr_channel_id: str,
+        ip_address: str,
+        provider: str,
+        resolved_channel: int,
+        requested_profile: str,
+        output_protocol: str,
+        now_ts: float,
+    ) -> StreamSession | None:
+        requested = str(requested_profile or "main").strip().lower() or "main"
+        for session in self._sessions.values():
+            if session.nvr_device_id != int(nvr_device_id):
+                continue
+            if session.nvr_channel_num != int(nvr_channel_num):
+                continue
+            if session.nvr_channel_id != str(nvr_channel_id or "").strip():
+                continue
+            if session.campus_code != str(campus_code or "").strip():
+                continue
+            if session.resolved_channel != int(resolved_channel):
+                continue
+            if session.output_protocol != str(output_protocol or "mpegts").strip().lower():
+                continue
+            if requested == "sub" and str(session.stream_profile or "").strip().lower() != "sub":
+                continue
+            parts = str(session.session_key or "").split("|")
+            if len(parts) >= 7:
+                if parts[4] != str(ip_address or "").strip():
+                    continue
+                if parts[6] != str(provider or "").strip():
+                    continue
+            session.updated_at = now_ts
+            return session
+        return None
 
     def _load_rtsp_probe_cache(
         self,
@@ -434,6 +474,25 @@ ON CONFLICT(nvr_device_id, channel_num, provider, ip_address, account, requested
         # RTSP 实时流使用业务通道号，而非 SDK 缓存通道号
         # SDK 通道号（resolved_channel）仅用于 SDK 下载，RTSP URL 规则不同
         rtsp_channel = int(nvr_channel_num) if int(nvr_channel_num) > 0 else int(resolved_channel)
+        now_ts = time.time()
+        if reuse_if_exists:
+            with self._lock:
+                self._cleanup_expired_locked(now_ts)
+                existing = self._find_reusable_session_before_probe_locked(
+                    campus_code=campus_code,
+                    nvr_device_id=nvr_device_id,
+                    nvr_channel_num=nvr_channel_num,
+                    nvr_channel_id=nvr_channel_id,
+                    ip_address=normalized_ip_address,
+                    provider=normalized_provider,
+                    resolved_channel=resolved_channel,
+                    requested_profile=normalized_profile,
+                    output_protocol=normalized_protocol,
+                    now_ts=now_ts,
+                )
+                if existing is not None:
+                    _log.debug("stream session reused before probe: session_id=%s nvr_device_id=%s nvr_channel_num=%s resolved_channel=%s requested_profile=%s actual_profile=%s protocol=%s", existing.session_id, existing.nvr_device_id, existing.nvr_channel_num, existing.resolved_channel, normalized_profile, existing.stream_profile, existing.output_protocol)
+                    return existing, True
         cached_probe = self._load_rtsp_probe_cache(
             nvr_device_id=nvr_device_id,
             channel_num=nvr_channel_num,
@@ -506,7 +565,6 @@ ON CONFLICT(nvr_device_id, channel_num, provider, ip_address, account, requested
                 normalized_protocol,
             ]
         )
-        now_ts = time.time()
         with self._lock:
             self._cleanup_expired_locked(now_ts)
             if reuse_if_exists:
@@ -517,7 +575,7 @@ ON CONFLICT(nvr_device_id, channel_num, provider, ip_address, account, requested
                         existing.updated_at = now_ts
                         _log.debug("stream session reused: session_id=%s nvr_device_id=%s nvr_channel_num=%s resolved_channel=%s profile=%s protocol=%s", existing.session_id, existing.nvr_device_id, existing.nvr_channel_num, existing.resolved_channel, existing.stream_profile, existing.output_protocol)
                         return existing, True
-        _log.info("stream rtsp probe ok: nvr_device_id=%s nvr_channel_num=%s rtsp_port=%s rtsp_url=%s", nvr_device_id, nvr_channel_num, resolved_rtsp_port, rtsp_url)
+        _log.debug("stream rtsp probe ok: nvr_device_id=%s nvr_channel_num=%s rtsp_port=%s rtsp_url=%s", nvr_device_id, nvr_channel_num, resolved_rtsp_port, rtsp_url)
         with self._lock:
             self._cleanup_expired_locked(now_ts)
             if reuse_if_exists:

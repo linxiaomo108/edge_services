@@ -257,6 +257,44 @@ ORDER BY t.server_task_id ASC, t.task_type ASC, s.id ASC
                 }
             )
 
+        related_download_status: dict[str, dict[str, str]] = {}
+        related_ids = sorted({
+            str(group.get("other_tasks_id") or "").strip()
+            for group in task_groups.values()
+            if str(group.get("other_tasks_id") or "").strip()
+        })
+        if related_ids:
+            placeholders = ",".join("?" for _ in related_ids)
+            related_rows = await asyncio.to_thread(
+                db.fetch_all,
+                f"""
+SELECT
+  t.server_task_id,
+  t.task_status,
+  t.current_step,
+  s.step_status
+FROM edge_stream_task t
+JOIN edge_stream_task_step s ON s.task_id = t.id AND s.step_code = 'DOWNLOAD'
+WHERE CAST(t.server_task_id AS TEXT) IN ({placeholders})
+ORDER BY t.server_task_id ASC, t.task_type ASC
+                """.strip(),
+                related_ids,
+            )
+            for related_row in related_rows or []:
+                sid = str(related_row["server_task_id"] or "").strip()
+                if not sid or sid in related_download_status:
+                    continue
+                step_status = int(related_row["step_status"] or 0)
+                status_text, status_type = _row_status(step_status)
+                current_step = str(related_row["current_step"] or "").upper()
+                task_status = int(related_row["task_status"] or 0)
+                if current_step == "DOWNLOAD" and task_status == 1 and step_status != 2:
+                    if step_status == 4:
+                        status_text, status_type = "已暂停", "paused"
+                    else:
+                        status_text, status_type = "进行中", "running"
+                related_download_status[sid] = {"status": status_text, "statusType": status_type}
+
         def _state_rank(task_status: int, current_step: str, target_step: str, step_status: int) -> int:
             if str(current_step or "").upper() == str(target_step or "").upper() and int(task_status or 0) == 1:
                 return 500
@@ -299,6 +337,30 @@ ORDER BY t.server_task_id ASC, t.task_type ASC, s.id ASC
                 if current is None or rank > int(current.get("rank") or 0) or (rank == int(current.get("rank") or 0) and step_process >= int(current.get("step_process") or 0)):
                     lesson_step_shadow[key2] = candidate
 
+        def _download_step_status_for_server_task(server_task_id: Any) -> dict[str, str]:
+            sid = str(server_task_id or "").strip()
+            if not sid:
+                return {}
+            if sid in related_download_status:
+                return related_download_status[sid]
+            for related_group in task_groups.values():
+                if str(related_group.get("server_task_id") or "") != sid:
+                    continue
+                for related_step in related_group.get("steps") or []:
+                    if str(related_step.get("step_code") or "").upper() != "DOWNLOAD":
+                        continue
+                    step_status = int(related_step.get("step_status") or 0)
+                    status_text, status_type = _row_status(step_status)
+                    current_step = str(related_group.get("current_step") or "").upper()
+                    task_status = int(related_group.get("task_status") or 0)
+                    if current_step == "DOWNLOAD" and task_status == 1 and step_status != 2:
+                        if step_status == 4:
+                            status_text, status_type = "已暂停", "paused"
+                        else:
+                            status_text, status_type = "进行中", "running"
+                    return {"status": status_text, "statusType": status_type}
+            return {}
+
         def _make_row(group: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
             sc = step["step_code"]
             step_type = _step_type(sc)
@@ -329,6 +391,8 @@ ORDER BY t.server_task_id ASC, t.task_type ASC, s.id ASC
                 display_status = detail_msg
             else:
                 display_status = last_msg if (status_type == "running" and last_msg) else status_text
+            other_task_id = str(group.get("other_tasks_id") or "")
+            other_task_status = _download_step_status_for_server_task(other_task_id)
             return {
                 "id": f"{group['server_task_id']}-{sc}",
                 "displayId": f"{group['server_task_id']}-{display_room}",
@@ -358,7 +422,9 @@ ORDER BY t.server_task_id ASC, t.task_type ASC, s.id ASC
                     "nvrChannel": str(group["nvr_channel_num"] or ""),
                     "lessonStartAt": group["download_start"],
                     "lessonEndAt": group["download_end"],
-                    "otherTasksId": str(group.get("other_tasks_id") or ""),
+                    "otherTasksId": other_task_id,
+                    "otherTaskStatus": str(other_task_status.get("status") or ""),
+                    "otherTaskStatusType": str(other_task_status.get("statusType") or ""),
                 }
                 if step_type == "download"
                 else None,
